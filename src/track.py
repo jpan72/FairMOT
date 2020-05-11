@@ -88,7 +88,7 @@ def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_im
 def main(opt, data_root='/data/MOT16/train', det_root=None, seqs=('MOT16-05',), exp_name='demo',
          save_images=False, save_videos=False, show_image=True):
     logger.setLevel(logging.INFO)
-    result_root = os.path.join(data_root, '..', 'results', exp_name)
+    result_root = os.path.join('..', 'results', exp_name)
     mkdir_if_missing(result_root)
     data_type = 'mot'
 
@@ -147,7 +147,7 @@ if __name__ == '__main__':
                       PETS09-S2L1
                       TUD-Campus
                       TUD-Stadtmitte'''
-        data_root = os.path.join(opt.data_dir, 'MOT15/images/train')
+        data_root = os.path.join(opt.data_dir, 'MOT15/train')
     else:
         seqs_str = '''MOT16-02
                       MOT16-04
@@ -209,6 +209,17 @@ if __name__ == '__main__':
                       ADL-Rundle-8
                       ETH-Pedcross2
                       TUD-Stadtmitte'''
+        data_root = os.path.join(opt.data_dir, 'MOT15/images/train')
+    if opt.val_mot15_unique:
+        seqs_str = '''ADL-Rundle-6
+                      ADL-Rundle-8
+                      KITTI-13
+                      KITTI-17
+                      PETS09-S2L1
+                      TUD-Campus
+                      TUD-Stadtmitte
+                      Venice-2
+                    '''
         data_root = os.path.join(opt.data_dir, 'MOT15/images/train')
     if opt.val_mot20:
         seqs_str = '''MOT20-01
