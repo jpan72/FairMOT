@@ -14,7 +14,7 @@ from tracking_utils.utils import *
 from utils.post_process import ctdet_post_process
 
 from .basetrack import BaseTrack, TrackState
-
+import copy
 
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
@@ -71,7 +71,7 @@ class STrack(BaseTrack):
 
         self.tracklet_len = 0
         self.state = TrackState.Tracked
-        #self.is_activated = True
+        self.is_activated = True
         self.frame_id = frame_id
         self.start_frame = frame_id
 
@@ -108,6 +108,30 @@ class STrack(BaseTrack):
         self.score = new_track.score
         if update_feature:
             self.update_features(new_track.curr_feat)
+
+    def update_ghost(self, ghost_tlwh, frame_id, update_feature=True, var_multiplier=1):
+        """
+        Update a matched track with GPN regressed coords
+        :type new_track: STrack
+        :type frame_id: int
+        :type update_feature: bool
+        :return:
+        """
+        self.frame_id = frame_id
+        self.tracklet_len += 1
+
+        new_tlwh = ghost_tlwh
+        # self.mean, self.covariance = self.kalman_filter.update(
+        #     self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh), var_multiplier)
+        self.mean, self.covariance = self.kalman_filter.update(
+            self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh))
+        self.state = TrackState.Tracked
+        self.is_activated = True
+
+        # self.score = new_track.score
+        # if update_feature:
+        #     self.update_features(new_track.curr_feat)
+        # self.tlwh_buffer.append(ghost_tlwh)
 
     @property
     # @jit(nopython=True)
@@ -219,7 +243,7 @@ class JDETracker(object):
 
     def update(self, im_blob, img0):
         self.frame_id += 1
-        activated_starcks = []
+        activated_stracks = []
         refind_stracks = []
         lost_stracks = []
         removed_stracks = []
@@ -294,12 +318,18 @@ class JDETracker(object):
         dists = matching.fuse_motion(self.kalman_filter, dists, strack_pool, detections)
         matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.7)
 
+        ghost_dets = []
         for itracked, idet in matches:
             track = strack_pool[itracked]
             det = detections[idet]
             if track.state == TrackState.Tracked:
                 track.update(detections[idet], self.frame_id)
-                activated_starcks.append(track)
+                activated_stracks.append(track)
+
+                # *** For each feature matched detection, create a ghost detection ***
+                ghost_det = copy.deepcopy(det)
+                ghost_det.ghost = True
+                ghost_dets.append(ghost_det)
             else:
                 track.re_activate(det, self.frame_id, new_id=False)
                 refind_stracks.append(track)
@@ -315,24 +345,120 @@ class JDETracker(object):
             det = detections[idet]
             if track.state == TrackState.Tracked:
                 track.update(det, self.frame_id)
-                activated_starcks.append(track)
+                activated_stracks.append(track)
             else:
                 track.re_activate(det, self.frame_id, new_id=False)
                 refind_stracks.append(track)
 
+        detections = [detections[i] for i in u_detection]
+
+        # # remove tracks that are out of frame (i.e. don't match ghosts with such tracks)
+        # for it in u_track:
+        #     track = r_tracked_stracks[it]
+        #     tlbr = track.tlbr
+        #     if self.frame_id > 10 and tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > 1088 or tlbr[3] > 608:
+        #         track.mark_lost()
+        #         lost_stracks.append(track)
+        #
+        detections_g = ghost_dets
+
+        '''Occlusion Reasoning to Find Ghost BBoxes'''
+        unrefined_bbox = []
+        refined_bbox = []
+
+        if self.frame_id > 1:
+
+            # Match unmatched tracks with matched dets (foreground tracklets)
+            r_tracked_stracks = [r_tracked_stracks[it] for it in u_track]
+            dists = matching.iou_distance(r_tracked_stracks, detections_g)
+            um_det_matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
+            # print(um_det_matches)
+            map1 = {}
+            for um, det in um_det_matches:
+                map1[r_tracked_stracks[um]] = detections_g[det]
+
+            # Run GPN
+
+            for track, det in map1.items():
+
+                # if not opt.nondeep:
+                #     track_img = track.img_patch
+                #     det_img = det.img_patch
+                #     track_tlbr = track.tlbr
+                #     det_tlbr = det.tlbr
+                #     tlwh_history = track.tlwh_buffer
+                #
+                #     track_img = self.transforms(track_img)
+                #     det_img = self.transforms(det_img)
+                #
+                #     track_tlbr[0] /= 1088
+                #     track_tlbr[1] /= 608
+                #     track_tlbr[2] /= 1088
+                #     track_tlbr[3] /= 608
+                #
+                #     det_tlbr[0] /= 1088
+                #     det_tlbr[1] /= 608
+                #     det_tlbr[2] /= 1088
+                #     det_tlbr[3] /= 608
+                #
+                #     tlwh_history = np.array(list(tlwh_history))
+                #     tlwh_history[:,0] /= 1088
+                #     tlwh_history[:,1] /= 608
+                #     tlwh_history[:,2] /= 1088
+                #     tlwh_history[:,3] /= 608
+                #
+                #     track_img = track_img.cuda().float()
+                #     det_img = det_img.cuda().float()
+                #
+                #     track_tlbr = torch.tensor(track_tlbr).cuda().float()
+                #     det_tlbr = torch.tensor(det_tlbr).cuda().float()
+                #     tlwh_history = torch.tensor(tlwh_history).cuda().float()
+                #
+                #     delta_bbox = gpn(track_img.unsqueeze(0), det_img.unsqueeze(0),
+                #                      track_tlbr.unsqueeze(0), det_tlbr.unsqueeze(0),
+                #                      tlwh_history.unsqueeze(0))
+                #
+                #     unrefined_bbox.append(track.tlbr)
+                #
+                #     delta_bbox = delta_bbox[0].cpu().detach().numpy()
+                #     delta_bbox[0] *= 1088
+                #     delta_bbox[1] *= 608
+                #     delta_bbox[2] *= 1088
+                #     delta_bbox[3] *= 608
+                #     # print()
+                #     # print(track.tlwh)
+                #     # import pdb; pdb.set_trace()
+                #     ghost_tlwh = track.tlwh + delta_bbox
+                #
+                #     # import pdb; pdb.set_trace()
+                #     refined_bbox.append(ghost_tlwh)
+                #
+                #     # print(ghost_tlwh)
+                #     track.update_ghost(ghost_tlwh, self.frame_id, update_feature=False)
+                #
+                # else:
+                #     track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
+                track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
+                
+                track.ghost = True
+                activated_stracks.append(track)
+
+                # TODO: Train with negative examples
+
+        '''Mark unmatched tracks as lost'''
         for it in u_track:
             track = r_tracked_stracks[it]
             if not track.state == TrackState.Lost:
                 track.mark_lost()
                 lost_stracks.append(track)
 
+
         '''Deal with unconfirmed tracks, usually tracks with only one beginning frame'''
-        detections = [detections[i] for i in u_detection]
         dists = matching.iou_distance(unconfirmed, detections)
         matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=0.7)
         for itracked, idet in matches:
             unconfirmed[itracked].update(detections[idet], self.frame_id)
-            activated_starcks.append(unconfirmed[itracked])
+            activated_stracks.append(unconfirmed[itracked])
         for it in u_unconfirmed:
             track = unconfirmed[it]
             track.mark_removed()
@@ -344,7 +470,7 @@ class JDETracker(object):
             if track.score < self.det_thresh:
                 continue
             track.activate(self.kalman_filter, self.frame_id)
-            activated_starcks.append(track)
+            activated_stracks.append(track)
         """ Step 5: Update state"""
         for track in self.lost_stracks:
             if self.frame_id - track.end_frame > self.max_time_lost:
@@ -354,7 +480,7 @@ class JDETracker(object):
         # print('Ramained match {} s'.format(t4-t3))
 
         self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]
-        self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_starcks)
+        self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_stracks)
         self.tracked_stracks = joint_stracks(self.tracked_stracks, refind_stracks)
         self.lost_stracks = sub_stracks(self.lost_stracks, self.tracked_stracks)
         self.lost_stracks.extend(lost_stracks)
@@ -365,7 +491,7 @@ class JDETracker(object):
         output_stracks = [track for track in self.tracked_stracks if track.is_activated]
 
         logger.debug('===========Frame {}=========='.format(self.frame_id))
-        logger.debug('Activated: {}'.format([track.track_id for track in activated_starcks]))
+        logger.debug('Activated: {}'.format([track.track_id for track in activated_stracks]))
         logger.debug('Refind: {}'.format([track.track_id for track in refind_stracks]))
         logger.debug('Lost: {}'.format([track.track_id for track in lost_stracks]))
         logger.debug('Removed: {}'.format([track.track_id for track in removed_stracks]))
