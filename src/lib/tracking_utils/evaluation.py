@@ -69,6 +69,7 @@ class Evaluator(object):
         # acc
         self.acc.update(gt_ids, trk_ids, iou_distance)
 
+        import pdb; pdb.set_trace()
         if rtn_events and iou_distance.size > 0 and hasattr(self.acc, 'last_mot_events'):
             events = self.acc.last_mot_events  # only supported by https://github.com/longcw/py-motmetrics
         else:

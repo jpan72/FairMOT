@@ -52,6 +52,8 @@ def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_im
     timer = Timer()
     results = []
     frame_id = 0
+    plot_arguments = []
+
     for path, img, img0 in dataloader:
         if frame_id % 20 == 0:
             logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1. / max(1e-5, timer.average_time)))
@@ -59,7 +61,7 @@ def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_im
         # run tracking
         timer.tic()
         blob = torch.from_numpy(img).cuda().unsqueeze(0)
-        online_targets = tracker.update(blob, img0)
+        online_targets, ghost_tracks = tracker.update(blob, img0)
         online_tlwhs = []
         online_ids = []
         for t in online_targets:
@@ -72,6 +74,9 @@ def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_im
         timer.toc()
         # save results
         results.append((frame_id + 1, online_tlwhs, online_ids))
+        if opt.vis_ghost_FP:
+            plot_arguments.append((img0, online_tlwhs, online_ids, frame_id,
+                                  1. / timer.average_time, ghost_tracks))
         if show_image or save_dir is not None:
             online_im = vis.plot_tracking(img0, online_tlwhs, online_ids, frame_id=frame_id,
                                           fps=1. / timer.average_time)
@@ -82,6 +87,8 @@ def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_im
         frame_id += 1
     # save results
     write_results(result_filename, results, data_type)
+    if opt.vis_ghost_FP:
+        return frame_id, timer.average_time, timer.calls, plot_arguments
     return frame_id, timer.average_time, timer.calls
 
 
@@ -103,8 +110,12 @@ def main(opt, data_root='/data/MOT16/train', det_root=None, seqs=('MOT16-05',), 
         result_filename = os.path.join(result_root, '{}.txt'.format(seq))
         meta_info = open(os.path.join(data_root, seq, 'seqinfo.ini')).read()
         frame_rate = int(meta_info[meta_info.find('frameRate') + 10:meta_info.find('\nseqLength')])
-        nf, ta, tc = eval_seq(opt, dataloader, data_type, result_filename,
-                              save_dir=output_dir, show_image=show_image, frame_rate=frame_rate)
+        if opt.vis_ghost_FP:
+            nf, ta, tc, plot_arguments = eval_seq(opt, dataloader, data_type, result_filename,
+                                  save_dir=output_dir, show_image=show_image, frame_rate=frame_rate)
+        else:
+            nf, ta, tc = eval_seq(opt, dataloader, data_type, result_filename,
+                                  save_dir=output_dir, show_image=show_image, frame_rate=frame_rate)
         n_frame += nf
         timer_avgs.append(ta)
         timer_calls.append(tc)
@@ -112,11 +123,47 @@ def main(opt, data_root='/data/MOT16/train', det_root=None, seqs=('MOT16-05',), 
         # eval
         logger.info('Evaluate seq: {}'.format(seq))
         evaluator = Evaluator(data_root, seq, data_type)
-        accs.append(evaluator.eval_file(result_filename))
+        acc = evaluator.eval_file(result_filename)
+        accs.append(acc)
+
         if save_videos:
             output_video_path = osp.join(output_dir, '{}.mp4'.format(seq))
             cmd_str = 'ffmpeg -f image2 -i {}/%05d.jpg -c:v copy {}'.format(output_dir, output_video_path)
             os.system(cmd_str)
+
+        if opt.vis_ghost_FP:
+            ghost_FP_image_dir = osp.join(opt.gfp_dir, 'images', opt.exp_dataset)
+            if not osp.exists(ghost_FP_image_dir):
+                os.makedirs(ghost_FP_image_dir)
+
+            for img0, online_tlwhs, online_ids, frame_id, fps, ghost_boxes in plot_arguments:
+                try:
+                    ghost_im = vis.plot_boxes(img0, online_tlwhs, online_ids, acc.mot_events.loc[frame_id], seq,
+                                                 evaluator,
+                                                 frame_id=frame_id, fps=fps, tlbr_boxes=ghost_boxes, color=(255,191,0), text='ghost') # blue
+                    FP_im = vis.plot_FP(img0, online_tlwhs, online_ids, acc.mot_events.loc[frame_id], seq, evaluator,
+                                                     frame_id=frame_id, fps=fps, color=(0,0,255)) # red
+
+                    # blend ghost image and FP image
+                    alpha_ghost = 0.35
+                    alpha_FP = 0.35
+                    alpha_original = 1 - alpha_ghost - alpha_FP
+
+                    blend_im = cv2.addWeighted(ghost_im, alpha_ghost, FP_im, alpha_FP, 0)
+                    blend_im = cv2.addWeighted(img0, alpha_original, blend_im, 1 - alpha_original, 0)
+                    cv2.imwrite(osp.join(ghost_FP_image_dir, '{:05d}.jpg'.format(frame_id)), blend_im)
+                except:
+                    pass
+
+            ghost_FP_video_dir = osp.join(opt.gfp_dir, 'video', opt.exp_dataset)
+            if not osp.exists(ghost_FP_video_dir):
+                os.makedirs(ghost_FP_video_dir)
+            ghost_FP_video_path = osp.join(ghost_FP_video_dir, '{}_ghost_FN.mp4'.format(seq))
+
+            cmd_str = 'ffmpeg -y -f image2 -i {}/%05d.jpg -c:v copy {}'.format(ghost_FP_image_dir, ghost_FP_video_path)
+            os.system(cmd_str)
+            os.system("rm -R {}".format(ghost_FP_image_dir))
+
     timer_avgs = np.asarray(timer_avgs)
     timer_calls = np.asarray(timer_calls)
     all_time = np.dot(timer_avgs, timer_calls)
@@ -140,15 +187,26 @@ if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     opt = opts().init()
 
-    if not opt.val_mot16:
+    if opt.exp_dataset == 'val_mot15_unique':
+        seqs_str = '''ADL-Rundle-6
+                      ADL-Rundle-8
+                      KITTI-13
+                      KITTI-17
+                      PETS09-S2L1
+                      TUD-Campus
+                      TUD-Stadtmitte
+                      Venice-2
+                    '''
+        data_root = os.path.join(opt.data_dir, 'MOT15/images/train')
+    if opt.exp_dataset == 'paper_val_mot15':
         seqs_str = '''KITTI-13
                       KITTI-17
                       ADL-Rundle-6
                       PETS09-S2L1
                       TUD-Campus
                       TUD-Stadtmitte'''
-        data_root = os.path.join(opt.data_dir, 'MOT15/train')
-    else:
+        data_root = os.path.join(opt.data_dir, 'MOT15/images/train')
+    if opt.exp_dataset == 'val_mot16':
         seqs_str = '''MOT16-02
                       MOT16-04
                       MOT16-05
@@ -156,8 +214,8 @@ if __name__ == '__main__':
                       MOT16-10
                       MOT16-11
                       MOT16-13'''
-        data_root = os.path.join(opt.data_dir, 'MOT16/train')
-    if opt.test_mot16:
+        data_root = os.path.join(opt.data_dir, 'MOT16/images/train')
+    if opt.exp_dataset == 'test_mot16':
         seqs_str = '''MOT16-01
                       MOT16-03
                       MOT16-06
@@ -165,8 +223,8 @@ if __name__ == '__main__':
                       MOT16-08
                       MOT16-12
                       MOT16-14'''
-        data_root = os.path.join(opt.data_dir, 'MOT16/test')
-    if opt.test_mot15:
+        data_root = os.path.join(opt.data_dir, 'MOT16/images/test')
+    if opt.exp_dataset == 'test_mot15':
         seqs_str = '''ADL-Rundle-1
                       ADL-Rundle-3
                       AVG-TownCentre
@@ -179,7 +237,7 @@ if __name__ == '__main__':
                       TUD-Crossing
                       Venice-1'''
         data_root = os.path.join(opt.data_dir, 'MOT15/images/test')
-    if opt.test_mot17:
+    if opt.exp_dataset == 'test_mot17':
         seqs_str = '''MOT17-01-SDP
                       MOT17-03-SDP
                       MOT17-06-SDP
@@ -188,7 +246,7 @@ if __name__ == '__main__':
                       MOT17-12-SDP
                       MOT17-14-SDP'''
         data_root = os.path.join(opt.data_dir, 'MOT17/images/test')
-    if opt.val_mot17:
+    if opt.exp_dataset == 'val_mot17':
         seqs_str = '''MOT17-02-SDP
                       MOT17-04-SDP
                       MOT17-05-SDP
@@ -197,38 +255,14 @@ if __name__ == '__main__':
                       MOT17-11-SDP
                       MOT17-13-SDP'''
         data_root = os.path.join(opt.data_dir, 'MOT17/images/train')
-    if opt.val_mot15:
-        seqs_str = '''KITTI-13
-                      KITTI-17
-                      ETH-Bahnhof
-                      ETH-Sunnyday
-                      PETS09-S2L1
-                      TUD-Campus
-                      TUD-Stadtmitte
-                      ADL-Rundle-6
-                      ADL-Rundle-8
-                      ETH-Pedcross2
-                      TUD-Stadtmitte'''
-        data_root = os.path.join(opt.data_dir, 'MOT15/images/train')
-    if opt.val_mot15_unique:
-        seqs_str = '''ADL-Rundle-6
-                      ADL-Rundle-8
-                      KITTI-13
-                      KITTI-17
-                      PETS09-S2L1
-                      TUD-Campus
-                      TUD-Stadtmitte
-                      Venice-2
-                    '''
-        data_root = os.path.join(opt.data_dir, 'MOT15/images/train')
-    if opt.val_mot20:
+    if opt.exp_dataset == 'val_mot20':
         seqs_str = '''MOT20-01
                       MOT20-02
                       MOT20-03
                       MOT20-05
                       '''
         data_root = os.path.join(opt.data_dir, 'MOT20/images/train')
-    if opt.test_mot20:
+    if opt.exp_dataset == 'test_mot20':
         seqs_str = '''MOT20-04
                       MOT20-06
                       MOT20-07

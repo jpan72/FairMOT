@@ -25,6 +25,56 @@ def resize_image(image, max_size=800):
     return image
 
 
+def plot_boxes(image, tlwhs, obj_ids, acc_frame, seq, evaluator, scores=None, frame_id=0, fps=0., tlbr_boxes=None, color=(255,255,255), text=''):
+
+    im = np.ascontiguousarray(np.copy(image))
+    im_h, im_w = im.shape[:2]
+
+    text_scale = max(1, image.shape[1] / 1600.)
+    text_thickness = 1 if text_scale > 1.1 else 1
+    line_thickness = max(1, int(image.shape[1] / 500.))*2
+
+    radius = max(5, int(im_w/140.))
+    cv2.putText(im, '[%s] frame: %d fps: %.2f num: %d' % (text, frame_id, fps, len(tlwhs)),
+                (0, int(15 * text_scale)), cv2.FONT_HERSHEY_PLAIN, text_scale, color, thickness=text_thickness)
+
+    # draw boxes
+    for i, tlbr in enumerate(tlbr_boxes):
+        x1, y1, x2, y2 = tlbr
+        intbox = tuple(map(int, (x1, y1, x2, y2)))
+        cv2.rectangle(im, intbox[0:2], intbox[2:4], color=color, thickness=-1)
+
+    return im
+
+
+def plot_FP(image, tlwhs, obj_ids, acc_frame, seq, evaluator, scores=None, frame_id=0, fps=0., color=(0,0,255)):
+
+    im = np.ascontiguousarray(np.copy(image))
+    im_h, im_w = im.shape[:2]
+
+    text_scale = max(1, image.shape[1] / 1600.)
+    text_thickness = 1 if text_scale > 1.1 else 1
+
+    radius = max(5, int(im_w/140.))
+    cv2.putText(im, '[FP] frame: %d fps: %.2f num: %d' % (frame_id, fps, len(tlwhs)),
+                (0, int(15 * text_scale)), cv2.FONT_HERSHEY_PLAIN, text_scale, (0, 0, 255), thickness=2)
+
+    # draw match, FP, SWITCH
+    for i, tlwh in enumerate(tlwhs):
+        x1, y1, w, h = tlwh
+        intbox = tuple(map(int, (x1, y1, x1 + w, y1 + h)))
+        obj_id = int(obj_ids[i])
+        id_text = '{}'.format(int(obj_id))
+
+        # draw FP
+        mot_type = acc_frame[acc_frame.HId.eq(obj_id)].Type.values[0]
+        if mot_type == 'FP':
+            cv2.rectangle(im, intbox[0:2], intbox[2:4], color=color, thickness=-1)
+        cv2.putText(im, id_text, (intbox[0], intbox[1] + 30), cv2.FONT_HERSHEY_PLAIN, text_scale, color)
+
+    return im
+
+
 def plot_tracking(image, tlwhs, obj_ids, scores=None, frame_id=0, fps=0., ids2=None):
     im = np.ascontiguousarray(np.copy(image))
     im_h, im_w = im.shape[:2]

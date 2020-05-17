@@ -153,6 +153,16 @@ class opts(object):
     self.parser.add_argument('--not_reg_offset', action='store_true',
                              help='not regress local offset.')
 
+    # experiment datasets
+    self.parser.add_argument('--exp_dataset', type=str, default='val_mot15_unique',
+                             help='experiment dataset')
+
+    # visualization
+    self.parser.add_argument('--vis_ghost_FP', action='store_true',
+                             help='visualize FPs that are ghost tracks')
+    self.parser.add_argument('--gfp_dir', type=str, default='../fair-gfp',
+                             help='visualization path of FPs that are ghost tracks')
+
   def parse(self, args=''):
     if args == '':
       opt = self.parser.parse_args()
