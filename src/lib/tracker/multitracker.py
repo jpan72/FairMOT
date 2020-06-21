@@ -25,6 +25,7 @@ class STrack(BaseTrack):
         self.kalman_filter = None
         self.mean, self.covariance = None, None
         self.is_activated = False
+        self.is_ghost = False
 
         self.score = score
         self.tracklet_len = 0
@@ -104,6 +105,7 @@ class STrack(BaseTrack):
             self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh))
         self.state = TrackState.Tracked
         self.is_activated = True
+        # self.is_ghost = False # .......... turned off for now
 
         self.score = new_track.score
         if update_feature:
@@ -127,6 +129,7 @@ class STrack(BaseTrack):
             self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh))
         self.state = TrackState.Tracked
         self.is_activated = True
+        self.is_ghost = True
 
         # self.score = new_track.score
         # if update_feature:
@@ -241,7 +244,7 @@ class JDETracker(object):
                 results[j] = results[j][keep_inds]
         return results
 
-    def update(self, im_blob, img0):
+    def update(self, im_blob, img0, opt):
         self.frame_id += 1
         activated_stracks = []
         refind_stracks = []
@@ -267,6 +270,7 @@ class JDETracker(object):
             id_feature = F.normalize(id_feature, dim=1)
 
             reg = output['reg'] if self.opt.reg_offset else None
+            # import pdb; pdb.set_trace()
             dets, inds = mot_decode(hm, wh, reg=reg, cat_spec_wh=self.opt.cat_spec_wh, K=self.opt.K)
             id_feature = _tranpose_and_gather_feat(id_feature, inds)
             id_feature = id_feature.squeeze(0)
@@ -351,35 +355,43 @@ class JDETracker(object):
 
         detections = [detections[i] for i in u_detection]
 
-        # remove tracks that are out of frame (i.e. don't match ghosts with such tracks)
-        for it in u_track:
-            track = r_tracked_stracks[it]
-            tlbr = track.tlbr
-            if self.frame_id > 10 and tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > 1088 or tlbr[3] > 608:
-                track.mark_lost()
-                lost_stracks.append(track)
+        # =========== ghost matching ===========
+        if opt.ghost:
 
-        detections_g = ghost_dets
+            # remove tracks that are out of frame (i.e. don't match ghosts with such tracks)
+            for it in u_track:
+                track = r_tracked_stracks[it]
+                tlbr = track.tlbr
+                if self.frame_id > 10 and tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height:
+                    track.mark_lost()
+                    lost_stracks.append(track)
+                    # track.mark_removed()
+                    # removed_stracks.append(track)
 
-        '''Occlusion Reasoning to Find Ghost BBoxes'''
-        ghost_tracks = []
+            detections_g = ghost_dets
 
-        if self.frame_id > 1:
+            '''Occlusion Reasoning to Find Ghost BBoxes'''
+            # ghost_tlbrs = []
 
-            # Match unmatched tracks with matched dets (foreground tracklets)
-            r_tracked_stracks = [r_tracked_stracks[it] for it in u_track]
-            dists = matching.iou_distance(r_tracked_stracks, detections_g)
-            um_det_matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
+            # if self.frame_id > 1:
+            if self.tracklet_len > 5:
 
-            map1 = {}
-            for um, det in um_det_matches:
-                map1[r_tracked_stracks[um]] = detections_g[det]
+                # Match unmatched tracks with matched dets (foreground tracklets)
+                r_tracked_stracks = [r_tracked_stracks[it] for it in u_track]
+                dists = matching.iou_distance(r_tracked_stracks, detections_g)
+                um_det_matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
 
-            # Activate ghost tracks that get paired with ghost detections
-            for track, det in map1.items():
-                track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
-                activated_stracks.append(track)
-                ghost_tracks.append(track.tlbr)
+                map1 = {}
+                for um, det in um_det_matches:
+                    map1[r_tracked_stracks[um]] = detections_g[det]
+
+                # Activate ghost tracks that get paired with ghost detections
+                for track, det in map1.items():
+                    track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
+                    activated_stracks.append(track)
+                    # ghost_tlbrs.append(track.tlbr)
+
+        # =========================================
 
         '''Mark unmatched tracks as lost'''
         for it in u_track:
@@ -432,8 +444,17 @@ class JDETracker(object):
         logger.debug('Lost: {}'.format([track.track_id for track in lost_stracks]))
         logger.debug('Removed: {}'.format([track.track_id for track in removed_stracks]))
 
-        return output_stracks, ghost_tracks
+        ghost_tlbrs = [track.tlbr for track in self.tracked_stracks if track.is_activated and track.is_ghost]
 
+        # in_frame_output_stracks = []
+        # for track in output_stracks:
+        #     tlbr = track.tlbr
+        #     if tlbr[0] >= 0 and tlbr[1] >= 0 and tlbr[2] < width and tlbr[3] < height:
+        #         in_frame_output_stracks.append(track)
+        #
+        # return in_frame_output_stracks, ghost_tlbrs
+
+        return output_stracks, ghost_tlbrs
 
 def joint_stracks(tlista, tlistb):
     exists = {}

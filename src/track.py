@@ -61,7 +61,7 @@ def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_im
         # run tracking
         timer.tic()
         blob = torch.from_numpy(img).cuda().unsqueeze(0)
-        online_targets, ghost_tracks = tracker.update(blob, img0)
+        online_targets, ghost_tracks = tracker.update(blob, img0, opt)
         online_tlwhs = []
         online_ids = []
         for t in online_targets:
@@ -74,7 +74,7 @@ def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_im
         timer.toc()
         # save results
         results.append((frame_id + 1, online_tlwhs, online_ids))
-        if opt.vis_ghost_FP:
+        if opt.vis_ghost_FP or opt.vis_ghost_FN:
             plot_arguments.append((img0, online_tlwhs, online_ids, frame_id,
                                   1. / timer.average_time, ghost_tracks))
         if show_image or save_dir is not None:
@@ -87,7 +87,7 @@ def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_im
         frame_id += 1
     # save results
     write_results(result_filename, results, data_type)
-    if opt.vis_ghost_FP:
+    if opt.vis_ghost_FP or opt.vis_ghost_FN:
         return frame_id, timer.average_time, timer.calls, plot_arguments
     return frame_id, timer.average_time, timer.calls
 
@@ -110,7 +110,7 @@ def main(opt, data_root='/data/MOT16/train', det_root=None, seqs=('MOT16-05',), 
         result_filename = os.path.join(result_root, '{}.txt'.format(seq))
         meta_info = open(os.path.join(data_root, seq, 'seqinfo.ini')).read()
         frame_rate = int(meta_info[meta_info.find('frameRate') + 10:meta_info.find('\nseqLength')])
-        if opt.vis_ghost_FP:
+        if opt.vis_ghost_FP or opt.vis_ghost_FN:
             nf, ta, tc, plot_arguments = eval_seq(opt, dataloader, data_type, result_filename,
                                   save_dir=output_dir, show_image=show_image, frame_rate=frame_rate)
         else:
@@ -136,12 +136,11 @@ def main(opt, data_root='/data/MOT16/train', det_root=None, seqs=('MOT16-05',), 
             if not osp.exists(ghost_FP_image_dir):
                 os.makedirs(ghost_FP_image_dir)
 
-            for img0, online_tlwhs, online_ids, frame_id, fps, ghost_boxes in plot_arguments:
-                try:
-                    ghost_im = vis.plot_boxes(img0, online_tlwhs, online_ids, acc.mot_events.loc[frame_id], seq,
-                                                 evaluator,
-                                                 frame_id=frame_id, fps=fps, tlbr_boxes=ghost_boxes, color=(255,191,0), text='ghost') # blue
-                    FP_im = vis.plot_FP(img0, online_tlwhs, online_ids, acc.mot_events.loc[frame_id], seq, evaluator,
+            try:
+                for img0, online_tlwhs, online_ids, frame_id, fps, ghost_boxes in plot_arguments:
+
+                    ghost_im = vis.plot_boxes(img0, frame_id=frame_id, fps=fps, boxes=ghost_boxes, type='tlbr', color=(255,191,0), line_thickness=-1) # blue
+                    FP_im = vis.plot_FP(img0, online_tlwhs, online_ids, acc.mot_events.loc[frame_id],
                                                      frame_id=frame_id, fps=fps, color=(0,0,255)) # red
 
                     # blend ghost image and FP image
@@ -151,18 +150,64 @@ def main(opt, data_root='/data/MOT16/train', det_root=None, seqs=('MOT16-05',), 
 
                     blend_im = cv2.addWeighted(ghost_im, alpha_ghost, FP_im, alpha_FP, 0)
                     blend_im = cv2.addWeighted(img0, alpha_original, blend_im, 1 - alpha_original, 0)
+
+                    # plot all GTs on blend image
+                    blend_im = vis.plot_all_GT(blend_im, evaluator, frame_id=frame_id, fps=fps, color=(0,255,0)) # green
+                    # plot all hypotheses on blend images
+                    blend_im= vis.plot_hypotheses(blend_im, online_tlwhs, online_ids, color=(255,0,0)) # blue
+
                     cv2.imwrite(osp.join(ghost_FP_image_dir, '{:05d}.jpg'.format(frame_id)), blend_im)
-                except:
-                    pass
+            except:
+                pass
 
             ghost_FP_video_dir = osp.join(opt.gfp_dir, 'video', opt.exp_dataset)
             if not osp.exists(ghost_FP_video_dir):
                 os.makedirs(ghost_FP_video_dir)
-            ghost_FP_video_path = osp.join(ghost_FP_video_dir, '{}_ghost_FN.mp4'.format(seq))
+            ghost_FP_video_path = osp.join(ghost_FP_video_dir, '{}_ghost_FP.mp4'.format(seq))
 
             cmd_str = 'ffmpeg -y -f image2 -i {}/%05d.jpg -c:v copy {}'.format(ghost_FP_image_dir, ghost_FP_video_path)
             os.system(cmd_str)
             os.system("rm -R {}".format(ghost_FP_image_dir))
+
+
+        if opt.vis_ghost_FN:
+            ghost_FN_image_dir = osp.join(opt.gfn_dir, 'images', opt.exp_dataset)
+            if not osp.exists(ghost_FN_image_dir):
+                os.makedirs(ghost_FN_image_dir)
+
+            # try:
+            if True:
+                for img0, online_tlwhs, online_ids, frame_id, fps, ghost_boxes in plot_arguments:
+
+                    ghost_im = vis.plot_boxes(img0, frame_id=frame_id, fps=fps, boxes=ghost_boxes, type='tlbr', color=(255,191,0), line_thickness=-1) # blue
+                    FN_im = vis.plot_FN(img0, online_tlwhs, online_ids, acc.mot_events.loc[frame_id], evaluator,
+                                                     frame_id=frame_id, fps=fps, color=(0,0,255)) # red
+
+                    # blend ghost image and FN image
+                    alpha_ghost = 0.35
+                    alpha_FN = 0.35
+                    alpha_original = 1 - alpha_ghost - alpha_FN
+
+                    blend_im = cv2.addWeighted(ghost_im, alpha_ghost, FN_im, alpha_FN, 0)
+                    blend_im = cv2.addWeighted(img0, alpha_original, blend_im, 1 - alpha_original, 0)
+
+                    # plot all GTs on blend image
+                    blend_im = vis.plot_all_GT(blend_im, evaluator, frame_id=frame_id, fps=fps, color=(0,255,0)) # green
+                    # plot all hypotheses on blend images
+                    blend_im= vis.plot_hypotheses(blend_im, online_tlwhs, online_ids, color=(255,0,0)) # blue
+
+                    cv2.imwrite(osp.join(ghost_FN_image_dir, '{:05d}.jpg'.format(frame_id)), blend_im)
+            # except:
+            #     pass
+
+            ghost_FN_video_dir = osp.join(opt.gfn_dir, 'video', opt.exp_dataset)
+            if not osp.exists(ghost_FN_video_dir):
+                os.makedirs(ghost_FN_video_dir)
+            ghost_FN_video_path = osp.join(ghost_FN_video_dir, '{}_ghost_FN.mp4'.format(seq))
+
+            cmd_str = 'ffmpeg -y -f image2 -i {}/%05d.jpg -c:v copy {}'.format(ghost_FN_image_dir, ghost_FN_video_path)
+            os.system(cmd_str)
+            os.system("rm -R {}".format(ghost_FN_image_dir))
 
     timer_avgs = np.asarray(timer_avgs)
     timer_calls = np.asarray(timer_calls)

@@ -25,7 +25,7 @@ class opts(object):
                                   'in the exp dir if load_model is empty.') 
 
     # system
-    self.parser.add_argument('--gpus', default='0, 1',
+    self.parser.add_argument('--gpus', default='3',
                              help='-1 for CPU, use comma for multiple gpus')
     self.parser.add_argument('--num_workers', type=int, default=8,
                              help='dataloader threads. 0 for single-thread.')
@@ -162,6 +162,15 @@ class opts(object):
                              help='visualize FPs that are ghost tracks')
     self.parser.add_argument('--gfp_dir', type=str, default='../fair-gfp',
                              help='visualization path of FPs that are ghost tracks')
+
+    self.parser.add_argument('--vis_ghost_FN', action='store_true',
+                             help='visualize FNs that are ghost tracks')
+    self.parser.add_argument('--gfn_dir', type=str, default='../fair-gfn',
+                             help='visualization path of FNs that are ghost tracks')
+
+    # ghost
+    self.parser.add_argument('--ghost', action='store_true',
+                             help='visualize FPs that are ghost tracks')
 
   def parse(self, args=''):
     if args == '':
