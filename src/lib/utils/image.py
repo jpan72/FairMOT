@@ -21,6 +21,7 @@ def transform_preds(coords, center, scale, output_size):
     trans = get_affine_transform(center, scale, 0, output_size, inv=1)
     for p in range(coords.shape[0]):
         target_coords[p, 0:2] = affine_transform(coords[p, 0:2], trans)
+    # print(coords, center, scale, output_size)
     return target_coords
 
 
@@ -44,6 +45,7 @@ def get_affine_transform(center,
 
     src = np.zeros((3, 2), dtype=np.float32)
     dst = np.zeros((3, 2), dtype=np.float32)
+
     src[0, :] = center + scale_tmp * shift
     src[1, :] = center + src_dir + scale_tmp * shift
     dst[0, :] = [dst_w * 0.5, dst_h * 0.5]

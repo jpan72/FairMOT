@@ -119,11 +119,11 @@ def plot_all_GT(image, evaluator, scores=None, frame_id=0, fps=0., color=(0,0,25
     for (gt_id, gt_tlwh) in zip(gt_objs, gt_tlwhs):
         x1, y1, w, h = gt_tlwh
         intbox = tuple(map(int, (x1, y1, x1 + w, y1 + h)))
-        if intbox[0] < 0 or intbox[1] < 0 or intbox[2] > 1920 or intbox[3] > 1080:
-            print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
-            print(intbox)
-            print(frame_id)
-            print(gt_id)
+        # if intbox[0] < 0 or intbox[1] < 0 or intbox[2] > 1920 or intbox[3] > 1080:
+        #     print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+        #     print(intbox)
+        #     print(frame_id)
+        #     print(gt_id)
 
         cv2.rectangle(im, intbox[0:2], intbox[2:4], color=color, thickness=3)
         cv2.putText(im, '{}'.format(gt_id[1]), (intbox[0], intbox[1] + 30), cv2.FONT_HERSHEY_PLAIN, text_scale, (0, 255, 0),

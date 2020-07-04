@@ -121,7 +121,8 @@ class opts(object):
     self.parser.add_argument('--data_cfg', type=str,
                              default='../src/lib/cfg/data.json',
                              help='load data from cfg')
-    self.parser.add_argument('--data_dir', type=str, default='/hdd/yongxinw/peds_data')
+    # self.parser.add_argument('--data_dir', type=str, default='/hdd/yongxinw/peds_data')
+    self.parser.add_argument('--data_dir', type=str, default='/mnt/hdd1/jingjing')
 
     # loss
     self.parser.add_argument('--mse_loss', action='store_true',
@@ -171,6 +172,7 @@ class opts(object):
     # ghost
     self.parser.add_argument('--ghost', action='store_true',
                              help='visualize FPs that are ghost tracks')
+
 
   def parse(self, args=''):
     if args == '':

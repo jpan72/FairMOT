@@ -72,6 +72,8 @@ class STrack(BaseTrack):
 
         self.tracklet_len = 0
         self.state = TrackState.Tracked
+        if frame_id == 1:
+            self.is_activated = True
         self.is_activated = True
         self.frame_id = frame_id
         self.start_frame = frame_id
@@ -221,9 +223,12 @@ class JDETracker(object):
     def post_process(self, dets, meta):
         dets = dets.detach().cpu().numpy()
         dets = dets.reshape(1, -1, dets.shape[2])
+        dets_prev = dets
         dets = ctdet_post_process(
             dets.copy(), [meta['c']], [meta['s']],
             meta['out_height'], meta['out_width'], self.opt.num_classes)
+        # import pdb; pdb.set_trace()
+
         for j in range(1, self.opt.num_classes + 1):
             dets[0][j] = np.array(dets[0][j], dtype=np.float32).reshape(-1, 5)
         return dets[0]
@@ -251,12 +256,13 @@ class JDETracker(object):
         lost_stracks = []
         removed_stracks = []
 
-        width = img0.shape[1]
-        height = img0.shape[0]
-        inp_height = im_blob.shape[2]
-        inp_width = im_blob.shape[3]
+        width = img0.shape[1]  # 1920
+        height = img0.shape[0]  # 1080
+        inp_height = im_blob.shape[2]  # 608
+        inp_width = im_blob.shape[3]  # 1088
         c = np.array([width / 2., height / 2.], dtype=np.float32)
         s = max(float(inp_width) / float(inp_height) * height, width) * 1.0
+        # import pdb; pdb.set_trace()
         meta = {'c': c, 's': s,
                 'out_height': inp_height // self.opt.down_ratio,
                 'out_width': inp_width // self.opt.down_ratio}
@@ -271,7 +277,7 @@ class JDETracker(object):
 
             reg = output['reg'] if self.opt.reg_offset else None
             # import pdb; pdb.set_trace()
-            dets, inds = mot_decode(hm, wh, reg=reg, cat_spec_wh=self.opt.cat_spec_wh, K=self.opt.K)
+            dets, inds = mot_decode(hm, wh, reg=reg, cat_spec_wh=self.opt.cat_spec_wh, K=self.opt.K)  # dets: in 272x152 scale
             id_feature = _tranpose_and_gather_feat(id_feature, inds)
             id_feature = id_feature.squeeze(0)
             id_feature = id_feature.cpu().numpy()
@@ -359,24 +365,28 @@ class JDETracker(object):
         if opt.ghost:
 
             # remove tracks that are out of frame (i.e. don't match ghosts with such tracks)
+            out_of_frame_it = []
             for it in u_track:
                 track = r_tracked_stracks[it]
                 tlbr = track.tlbr
                 if self.frame_id > 10 and tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height:
                     track.mark_lost()
                     lost_stracks.append(track)
+                    out_of_frame_it.append(it)
                     # track.mark_removed()
                     # removed_stracks.append(track)
 
             detections_g = ghost_dets
 
+            # r_tracked_stracks = [r_tracked_stracks[it] for it in u_track if (it not in out_of_frame_it)]
+
             '''Occlusion Reasoning to Find Ghost BBoxes'''
             # ghost_tlbrs = []
 
-            # if self.frame_id > 1:
-            if self.tracklet_len > 5:
+            if self.frame_id > 1:
 
                 # Match unmatched tracks with matched dets (foreground tracklets)
+                # r_tracked_stracks = [r_tracked_stracks[it] for it in u_track if (it not in out_of_frame_it) and r_tracked_stracks[it].tracklet_len > 5]
                 r_tracked_stracks = [r_tracked_stracks[it] for it in u_track]
                 dists = matching.iou_distance(r_tracked_stracks, detections_g)
                 um_det_matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
@@ -419,6 +429,26 @@ class JDETracker(object):
                 continue
             track.activate(self.kalman_filter, self.frame_id)
             activated_stracks.append(track)
+
+        """ Extra step: Remove out-of-frame tracks"""
+        for track in self.tracked_stracks:
+            tlbr = track.tlbr
+            tlwh = track.tlwh
+            track_w, track_h = tlwh[2], tlwh[3]
+            # import pdb; pdb.set_trace()
+            # print(track.tracklet_len)
+            # print(tlbr[2], width)
+            # print(tlbr[3], height)
+            # print()
+            # print(tlbr)
+
+            # if track.tracklet_len > 10 and ( tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height):
+            # if  (track.tracklet_len > 5 and track_h / track_w > 3):
+            # if track.tracklet_len > 5 and (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height):
+            #     track.mark_removed()
+            #     removed_stracks.append(track)
+
+
         """ Step 5: Update state"""
         for track in self.lost_stracks:
             if self.frame_id - track.end_frame > self.max_time_lost:
