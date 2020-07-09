@@ -57,6 +57,7 @@ def plot_FP(image, tlwhs, obj_ids, acc_frame, frame_id=0, fps=0., color=(0,0,255
 
     im = np.ascontiguousarray(np.copy(image))
     im_h, im_w = im.shape[:2]
+    print(im_h, im_w)
 
     text_scale = max(1, image.shape[1] / 1600.)
     text_thickness = 1 if text_scale > 1.1 else 1

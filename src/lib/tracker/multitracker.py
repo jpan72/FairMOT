@@ -369,7 +369,7 @@ class JDETracker(object):
             for it in u_track:
                 track = r_tracked_stracks[it]
                 tlbr = track.tlbr
-                if self.frame_id > 10 and tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height:
+                if track.tracklet_len < 1 or (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height):
                     track.mark_lost()
                     lost_stracks.append(track)
                     out_of_frame_it.append(it)
@@ -380,6 +380,7 @@ class JDETracker(object):
 
             # r_tracked_stracks = [r_tracked_stracks[it] for it in u_track if (it not in out_of_frame_it)]
 
+
             '''Occlusion Reasoning to Find Ghost BBoxes'''
             # ghost_tlbrs = []
 
@@ -387,7 +388,8 @@ class JDETracker(object):
 
                 # Match unmatched tracks with matched dets (foreground tracklets)
                 # r_tracked_stracks = [r_tracked_stracks[it] for it in u_track if (it not in out_of_frame_it) and r_tracked_stracks[it].tracklet_len > 5]
-                r_tracked_stracks = [r_tracked_stracks[it] for it in u_track]
+                r_tracked_stracks = [r_tracked_stracks[it] for it in u_track if (it not in out_of_frame_it)] # 78.7, 76.1
+                # r_tracked_stracks = [r_tracked_stracks[it] for it in u_track]
                 dists = matching.iou_distance(r_tracked_stracks, detections_g)
                 um_det_matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
 
@@ -430,23 +432,7 @@ class JDETracker(object):
             track.activate(self.kalman_filter, self.frame_id)
             activated_stracks.append(track)
 
-        """ Extra step: Remove out-of-frame tracks"""
-        for track in self.tracked_stracks:
-            tlbr = track.tlbr
-            tlwh = track.tlwh
-            track_w, track_h = tlwh[2], tlwh[3]
-            # import pdb; pdb.set_trace()
-            # print(track.tracklet_len)
-            # print(tlbr[2], width)
-            # print(tlbr[3], height)
-            # print()
-            # print(tlbr)
 
-            # if track.tracklet_len > 10 and ( tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height):
-            # if  (track.tracklet_len > 5 and track_h / track_w > 3):
-            # if track.tracklet_len > 5 and (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height):
-            #     track.mark_removed()
-            #     removed_stracks.append(track)
 
 
         """ Step 5: Update state"""
@@ -460,13 +446,39 @@ class JDETracker(object):
         self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]
         self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_stracks)
         self.tracked_stracks = joint_stracks(self.tracked_stracks, refind_stracks)
+
+        # """ Extra step: Remove out-of-frame tracks"""
+        # for track in self.tracked_stracks:
+        #     tlbr = track.tlbr
+        #     tlwh = track.tlwh
+        #     track_w, track_h = tlwh[2], tlwh[3]
+        #     # import pdb; pdb.set_trace()
+        #     # print(track.tracklet_len)
+        #     # print(tlbr[2], width)
+        #     # print(tlbr[3], height)
+        #     # print()
+        #     # print(tlbr)
+        #
+        #     # if track.tracklet_len > 10 and ( tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height): # 78.5, 76.1
+        #     # if  (track.tracklet_len > 5 and track_h / track_w > 3): # 73.6, 75.9
+        #     # if track.tracklet_len > 5 and (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height): # 78.5, 76.1
+        #     # if  (track.tracklet_len > 10 and track_h / track_w > 5): # 78.7, 76.1
+        #     # print(track_h, track_w, track_h/track_w)
+        #     # if track_h / track_w > 1:
+        #     # print('...')
+        #     if track.tracklet_len >= 0 and (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height):
+        #     # if track.tracklet_len > 5 and track_h / track_w > 4:
+        #         # print('remove')
+        #         track.mark_removed()
+        #         self.removed_stracks.append(track)
+
         self.lost_stracks = sub_stracks(self.lost_stracks, self.tracked_stracks)
         self.lost_stracks.extend(lost_stracks)
         self.lost_stracks = sub_stracks(self.lost_stracks, self.removed_stracks)
         self.removed_stracks.extend(removed_stracks)
         self.tracked_stracks, self.lost_stracks = remove_duplicate_stracks(self.tracked_stracks, self.lost_stracks)
         # get scores of lost tracks
-        output_stracks = [track for track in self.tracked_stracks if track.is_activated]
+        output_stracks = [track for track in self.tracked_stracks if track.is_activated and track.state == TrackState.Tracked]
 
         logger.debug('===========Frame {}=========='.format(self.frame_id))
         logger.debug('Activated: {}'.format([track.track_id for track in activated_stracks]))
