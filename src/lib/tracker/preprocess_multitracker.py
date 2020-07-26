@@ -419,7 +419,8 @@ class JDETracker(object):
                 map1 = {}
                 for um, det in um_det_matches:
                     map1[r_tracked_stracks[um]] = detections_g[det]
-                print(map1.keys())
+                # if len(map1) > 0:
+                #     print(map1.keys())
 
                 # Activate ghost tracks that get paired with ghost detections
                 for track, det in map1.items():
@@ -524,10 +525,10 @@ class JDETracker(object):
             dataset_root = '../preprocess-ghost-bbox-th{}-map-more-filter/'.format(opt.occ_reason_thres)
         else:
             dataset_root = '../preprocess-ghost-bbox-th0.6/'
-        save_dir = osp.join(prefix, 'preprocess').replace('/mnt/hdd1/jingjing/', dataset_root)
+        save_dir = osp.join(prefix, 'preprocess').replace(opt.data_dir, dataset_root)
         if not osp.exists(save_dir):
             os.makedirs(save_dir)
-        save_path = path.replace('/mnt/hdd1/jingjing/', dataset_root).replace('img1', 'preprocess').replace('.png', '').replace('.jpg', '')
+        save_path = path.replace(opt.data_dir, dataset_root).replace('img1', 'preprocess').replace('.png', '').replace('.jpg', '')
 
 
         trk_tlwhs = [track.tlwh for track in output_stracks]
@@ -552,7 +553,7 @@ class JDETracker(object):
 
             acc_frame_p = evaluator.acc.mot_events.loc[self.frame_id-2]
 
-            print('miss_OIds', miss_OIds)
+            # print('miss_OIds', miss_OIds)
             # Go over missing tracks by their OId
             for miss_OId in miss_OIds:
 
@@ -561,7 +562,7 @@ class JDETracker(object):
 
                 miss_HId_p = acc_frame_p[acc_frame_p.OId.eq(miss_OId)].HId.values
                 if len(miss_HId_p) == 0:
-                    # print('cannot find miss OId from tracks in previous frame')
+                    print('cannot find miss OId from tracks in previous frame')
                     continue
                 else:
                     miss_HId_p = miss_HId_p[0]
