@@ -14,9 +14,24 @@ import os.path as osp
 
 from lib.models.GPN_model import GPN
 import torch.nn as nn
+import numpy as np
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
+
+def tlbrs_to_tlwhs(tlbrs):
+    ret = tlbrs
+    ret[:,2:] -= ret[:,:2]
+    return ret
+
+def tlwhs_to_xyahs(tlwhs):
+    """Convert bounding boxes to format `(center x, center y, aspect ratio,
+    height)`, where the aspect ratio is `width / height`.
+    """
+    ret = tlwhs
+    ret[:,:2] += ret[:,2:] / 2
+    ret[:,2] /= ret[:,3]
+    return ret
 
 def train(
         cfg,
@@ -196,6 +211,13 @@ def train(
             #                 pass
             #             # print()
 
+            track_tlwhs = tlbrs_to_tlwhs(track_tlbrs)
+            FN_tlwhs = track_tlwhs + target_delta_bbox
+            FN_xyahs = tlwhs_to_xyahs(FN_tlwhs)
+            track_xyahs = tlwhs_to_xyahs(track_tlwhs)
+
+            target_delta_bbox_xyah = FN_xyahs - track_xyahs
+
             track_imgs = track_imgs.cuda().float()
             det_imgs = det_imgs.cuda().float()
             track_tlbrs = track_tlbrs.cuda().float()
@@ -205,7 +227,8 @@ def train(
             tlwh_histories[:, :, 1] /= 608
             tlwh_histories[:, :, 2] /= 1088
             tlwh_histories[:, :, 3] /= 608
-            target_delta_bbox = target_delta_bbox.cuda().float()
+            target_delta_bbox_xyah = target_delta_bbox_xyah.cuda().float()
+
 
             # # SGD burn-in
             # burnin = min(1000, len(dataloader))
@@ -220,7 +243,7 @@ def train(
 
             delta_bbox = gpn(track_imgs, det_imgs, track_tlbrs, det_tlbrs, tlwh_histories)
             # delta_bbox = gpn(track_imgs, track_tlbrs,  tlwh_histories)
-            loss = smooth_l1_loss(delta_bbox, target_delta_bbox)
+            loss = smooth_l1_loss(delta_bbox, target_delta_bbox_xyah)
 
             # loss = torch.mean(loss)
             loss.backward()
@@ -249,14 +272,16 @@ def train(
             #     logger.info(s)
 
             if i % 100 == 0:
-                target_delta_bbox[:, 0] *= 1088
-                target_delta_bbox[:, 1] *= 608
-                target_delta_bbox[:, 2] *= 1088
-                target_delta_bbox[:, 3] *= 608
+                print()
+                print('========= train ==========')
+                target_delta_bbox_xyah[:, 0] *= 1088
+                target_delta_bbox_xyah[:, 1] *= 608
+                # target_delta_bbox[:, 2] *= 1088
+                target_delta_bbox_xyah[:, 3] *= 608
 
                 delta_bbox[:, 0] *= 1088
                 delta_bbox[:, 1] *= 608
-                delta_bbox[:, 2] *= 1088
+                # delta_bbox[:, 2] *= 1088
                 delta_bbox[:, 3] *= 608
 
                 print()
@@ -326,14 +351,14 @@ def train(
             loss_test_sum += loss.cpu().detach().numpy()
 
             if i % 100 == 0:
-                target_delta_bbox[:, 0] *= 1088
-                target_delta_bbox[:, 1] *= 608
-                target_delta_bbox[:, 2] *= 1088
-                target_delta_bbox[:, 3] *= 608
+                target_delta_bbox_xyah[:, 0] *= 1088
+                target_delta_bbox_xyah[:, 1] *= 608
+                # target_delta_bbox[:, 2] *= 1088
+                target_delta_bbox_xyah[:, 3] *= 608
 
                 delta_bbox[:, 0] *= 1088
                 delta_bbox[:, 1] *= 608
-                delta_bbox[:, 2] *= 1088
+                # delta_bbox[:, 2] *= 1088
                 delta_bbox[:, 3] *= 608
 
                 print()
