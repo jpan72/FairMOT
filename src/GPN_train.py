@@ -276,7 +276,6 @@ def train(
                 print('========= train ==========')
                 target_delta_bbox_xyah[:, 0] *= 1088
                 target_delta_bbox_xyah[:, 1] *= 608
-                # target_delta_bbox[:, 2] *= 1088
                 target_delta_bbox_xyah[:, 3] *= 608
 
                 delta_bbox[:, 0] *= 1088
