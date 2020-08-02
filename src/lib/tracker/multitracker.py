@@ -15,10 +15,11 @@ from utils.post_process import ctdet_post_process
 
 from .basetrack import BaseTrack, TrackState
 import copy
+from torchvision.transforms import transforms as T
 
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
-    def __init__(self, tlwh, score, temp_feat, buffer_size=30):
+    def __init__(self, tlwh, score, temp_feat, buffer_size=30, img_patch=None):
 
         # wait activate
         self._tlwh = np.asarray(tlwh, dtype=np.float)
@@ -34,6 +35,10 @@ class STrack(BaseTrack):
         self.update_features(temp_feat)
         self.features = deque([], maxlen=buffer_size)
         self.alpha = 0.9
+
+        self.history_len = 10
+        self.tlwh_buffer = deque([], maxlen=self.history_len)
+        self.img_patch = img_patch
 
     def update_features(self, feat):
         feat /= np.linalg.norm(feat)
@@ -84,6 +89,8 @@ class STrack(BaseTrack):
         )
 
         self.update_features(new_track.curr_feat)
+        self.tlwh_buffer = deque([], maxlen=self.history_len)
+        self.tlwh_buffer.append(new_track.tlwh)
         self.tracklet_len = 0
         self.state = TrackState.Tracked
         self.is_activated = True
@@ -112,6 +119,8 @@ class STrack(BaseTrack):
         self.score = new_track.score
         if update_feature:
             self.update_features(new_track.curr_feat)
+        self.tlwh_buffer.append(new_track.tlwh)
+        self.img_patch = new_track.img_patch
 
     def update_ghost(self, ghost_tlwh, frame_id, update_feature=True, var_multiplier=1):
         """
@@ -136,7 +145,7 @@ class STrack(BaseTrack):
         # self.score = new_track.score
         # if update_feature:
         #     self.update_features(new_track.curr_feat)
-        # self.tlwh_buffer.append(ghost_tlwh)
+        self.tlwh_buffer.append(ghost_tlwh)
 
     @property
     # @jit(nopython=True)
@@ -174,6 +183,14 @@ class STrack(BaseTrack):
 
     def to_xyah(self):
         return self.tlwh_to_xyah(self.tlwh)
+
+    @staticmethod
+    # @jit(nopython=True)
+    def xyah_to_tlwh(xyah):
+        ret = np.asarray(xyah).copy()
+        ret[2] *= ret[3]
+        ret[:2] -= ret[2:] / 2
+        return ret
 
     @staticmethod
     # @jit(nopython=True)
@@ -220,6 +237,20 @@ class JDETracker(object):
 
         self.kalman_filter = KalmanFilter()
 
+        if opt.network == 'alexnet':
+            input_size = 256
+        else:
+            input_size = 224
+
+        self.transforms = T.Compose([
+                T.ToPILImage(),
+                T.Resize((input_size, input_size)),
+                T.RandomCrop(200),
+                T.Resize((input_size, input_size)),
+                T.ToTensor(),
+                T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+                ])
+
     def post_process(self, dets, meta):
         dets = dets.detach().cpu().numpy()
         dets = dets.reshape(1, -1, dets.shape[2])
@@ -249,7 +280,7 @@ class JDETracker(object):
                 results[j] = results[j][keep_inds]
         return results
 
-    def update(self, im_blob, img0, opt):
+    def update(self, im_blob, img0, opt, gpn):
         self.frame_id += 1
         activated_stracks = []
         refind_stracks = []
@@ -289,6 +320,27 @@ class JDETracker(object):
         dets = dets[remain_inds]
         id_feature = id_feature[remain_inds]
 
+        # Get image patch
+        bbox = np.rint(dets[:, :4]).astype(int)
+        bbox_x, bbox_y, bbox_w, bbox_h = bbox[:, 0], bbox[:, 1], bbox[:, 2], bbox[:, 3]
+        h0, w0, _ = img0.shape
+
+        bbox_x[bbox_x > w0] = w0
+        bbox_x[bbox_x < 0] = 0
+        bbox_y[bbox_y > h0] = h0
+        bbox_y[bbox_y < 0] = 0
+
+        h_rs = 224
+        w_rs = 224
+        img_patches = []
+        for x, y, w, h in zip(bbox_x, bbox_y, bbox_w, bbox_h):
+            tmp = img0[y:y + h, x:x + w, :]
+            tmp = np.ascontiguousarray(tmp)
+            import cv2
+            tmp = cv2.resize(tmp, (h_rs, w_rs))
+            img_patches.append(tmp)
+
+
         # vis
         '''
         for i in range(0, dets.shape[0]):
@@ -303,8 +355,10 @@ class JDETracker(object):
 
         if len(dets) > 0:
             '''Detections'''
-            detections = [STrack(STrack.tlbr_to_tlwh(tlbrs[:4]), tlbrs[4], f, 30) for
-                          (tlbrs, f) in zip(dets[:, :5], id_feature)]
+            # detections = [STrack(STrack.tlbr_to_tlwh(tlbrs[:4]), tlbrs[4], f, 30) for
+            #               (tlbrs, f) in zip(dets[:, :5], id_feature)]
+            detections = [STrack(STrack.tlbr_to_tlwh(tlbrs[:4]), tlbrs[4], f, 30, p) for
+                          (tlbrs, f, p) in zip(dets[:, :5], id_feature, img_patches)]
         else:
             detections = []
 
@@ -324,25 +378,25 @@ class JDETracker(object):
             #strack.predict()
         STrack.multi_predict(strack_pool)
 
-        ''' Extend tracks moving out of frame with KF prediction '''
-        new_strack_pool = []
-        for track in strack_pool:
-            tlbr = track.tlbr
-            tlwh = track.tlwh
-            track_w, track_h = tlwh[2], tlwh[3]
+        # ''' Extend tracks moving out of frame with KF prediction '''
+        # new_strack_pool = []
+        # for track in strack_pool:
+        #     tlbr = track.tlbr
+        #     tlwh = track.tlwh
+        #     track_w, track_h = tlwh[2], tlwh[3]
+        #
+        #     if track.tracklet_len >= 30 and (track_h / track_w > 5 or (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height)):
+        #     # if track.tracklet_len > 5 and track_h / track_w > 4:
+        #         # print('remove')
+        #         # track.mark_removed()
+        #         # self.removed_stracks.append(track)
+        #
+        #         track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
+        #         activated_stracks.append(track)
+        #     else:
+        #         new_strack_pool.append(track)
 
-            if track.tracklet_len >= 30 and (track_h / track_w > 5 or (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height)):
-            # if track.tracklet_len > 5 and track_h / track_w > 4:
-                # print('remove')
-                # track.mark_removed()
-                # self.removed_stracks.append(track)
-
-                track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
-                activated_stracks.append(track)
-            else:
-                new_strack_pool.append(track)
-
-        strack_pool = new_strack_pool
+        # strack_pool = new_strack_pool
 
         dists = matching.embedding_distance(strack_pool, detections)
         #dists = matching.gate_cost_matrix(self.kalman_filter, dists, strack_pool, detections)
@@ -418,11 +472,64 @@ class JDETracker(object):
                 for um, det in um_det_matches:
                     map1[r_tracked_stracks[um]] = detections_g[det]
 
-                # Activate ghost tracks that get paired with ghost detections
+                # Run GPN
                 for track, det in map1.items():
-                    track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
+
+                    track_img = track.img_patch
+                    det_img = det.img_patch
+                    track_tlbr = track.tlbr
+                    det_tlbr = det.tlbr
+                    tlwh_history = track.tlwh_buffer
+
+                    track_img = self.transforms(track_img)
+                    det_img = self.transforms(det_img)
+
+                    track_tlbr[0] /= 1088
+                    track_tlbr[1] /= 608
+                    track_tlbr[2] /= 1088
+                    track_tlbr[3] /= 608
+
+                    det_tlbr[0] /= 1088
+                    det_tlbr[1] /= 608
+                    det_tlbr[2] /= 1088
+                    det_tlbr[3] /= 608
+
+                    tlwh_history = np.array(list(tlwh_history))
+                    tlwh_history[:, 0] /= 1088
+                    tlwh_history[:, 1] /= 608
+                    tlwh_history[:, 2] /= 1088
+                    tlwh_history[:, 3] /= 608
+
+                    track_img = track_img.cuda().float()
+                    det_img = det_img.cuda().float()
+
+                    track_tlbr = torch.tensor(track_tlbr).cuda().float()
+                    det_tlbr = torch.tensor(det_tlbr).cuda().float()
+                    tlwh_history = torch.tensor(tlwh_history).cuda().float()
+
+                    delta_bbox_xyah = gpn(track_img.unsqueeze(0), det_img.unsqueeze(0),
+                                     track_tlbr.unsqueeze(0), det_tlbr.unsqueeze(0),
+                                     tlwh_history.unsqueeze(0))
+
+                    delta_bbox_xyah = delta_bbox_xyah[0].cpu().detach().numpy()
+                    delta_bbox_xyah[0] *= 1088
+                    delta_bbox_xyah[1] *= 608
+                    delta_bbox_xyah[3] *= 608
+
+                    ghost_xyah = STrack.tlwh_to_xyah(track.tlwh) + delta_bbox_xyah
+                    ghost_tlwh = STrack.xyah_to_tlwh(ghost_xyah)
+
+                    track.update_ghost(ghost_tlwh, self.frame_id, update_feature=False)
+                    # track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
+                    track.ghost = True
                     activated_stracks.append(track)
-                    # ghost_tlbrs.append(track.tlbr)
+
+                #
+                # # Activate ghost tracks that get paired with ghost detections
+                # for track, det in map1.items():
+                #     track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
+                #     activated_stracks.append(track)
+                #     # ghost_tlbrs.append(track.tlbr)
 
         # =========================================
 

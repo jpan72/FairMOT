@@ -22,6 +22,8 @@ import datasets.dataset.jde as datasets
 from tracking_utils.utils import mkdir_if_missing
 from opts import opts
 
+from lib.models.GPN_model import GPN
+
 
 def write_results(filename, results, data_type):
     if data_type == 'mot':
@@ -45,7 +47,7 @@ def write_results(filename, results, data_type):
     logger.info('save results to {}'.format(filename))
 
 
-def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_image=True, frame_rate=30):
+def eval_seq(opt, gpn, dataloader, data_type, result_filename, save_dir=None, show_image=True, frame_rate=30):
     if save_dir:
         mkdir_if_missing(save_dir)
     tracker = JDETracker(opt, frame_rate=frame_rate)
@@ -61,7 +63,7 @@ def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_im
         # run tracking
         timer.tic()
         blob = torch.from_numpy(img).cuda().unsqueeze(0)
-        online_targets, ghost_tracks = tracker.update(blob, img0, opt)
+        online_targets, ghost_tracks = tracker.update(blob, img0, opt, gpn)
         online_tlwhs = []
         online_ids = []
         for t in online_targets:
@@ -103,6 +105,11 @@ def main(opt, data_root='/data/MOT16/train', det_root=None, seqs=('MOT16-05',), 
     accs = []
     n_frame = 0
     timer_avgs, timer_calls = [], []
+
+    gpn = GPN(network=opt.network).cuda()
+    gpn.eval()
+    gpn.load_state_dict(torch.load(opt.load_path))
+
     for seq in seqs:
         output_dir = os.path.join(data_root, '..', 'outputs', exp_name, seq) if save_images or save_videos else None
         logger.info('start seq: {}'.format(seq))
@@ -112,10 +119,10 @@ def main(opt, data_root='/data/MOT16/train', det_root=None, seqs=('MOT16-05',), 
         meta_info = open(os.path.join(data_root, seq, 'seqinfo.ini')).read()
         frame_rate = int(meta_info[meta_info.find('frameRate') + 10:meta_info.find('\nseqLength')])
         if opt.vis_ghost_FP or opt.vis_ghost_FN:
-            nf, ta, tc, plot_arguments = eval_seq(opt, dataloader, data_type, result_filename,
+            nf, ta, tc, plot_arguments = eval_seq(opt, gpn, dataloader, data_type, result_filename,
                                   save_dir=output_dir, show_image=show_image, frame_rate=frame_rate)
         else:
-            nf, ta, tc = eval_seq(opt, dataloader, data_type, result_filename,
+            nf, ta, tc = eval_seq(opt, gpn, dataloader, data_type, result_filename,
                                   save_dir=output_dir, show_image=show_image, frame_rate=frame_rate)
         n_frame += nf
         timer_avgs.append(ta)

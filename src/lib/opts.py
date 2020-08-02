@@ -173,6 +173,9 @@ class opts(object):
     self.parser.add_argument('--ghost', action='store_true',
                              help='visualize FPs that are ghost tracks')
 
+    # deep ghost refinement network
+    self.parser.add_argument('--load-path', type=str, default='model_lstm_0.001.pth', help='path to load model')
+    self.parser.add_argument('--network', type=str, default='lstm', help='lstm/alexnet/resnet')
 
   def parse(self, args=''):
     if args == '':
