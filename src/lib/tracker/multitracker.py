@@ -438,18 +438,18 @@ class JDETracker(object):
 
         # =========== ghost matching ===========
         if opt.ghost:
-
-            # remove tracks that are out of frame (i.e. don't match ghosts with such tracks)
-            out_of_frame_it = []
-            for it in u_track:
-                track = r_tracked_stracks[it]
-                tlbr = track.tlbr
-                if track.tracklet_len < 1 or (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height):
-                    track.mark_lost()
-                    lost_stracks.append(track)
-                    out_of_frame_it.append(it)
-                    # track.mark_removed()
-                    # removed_stracks.append(track)
+            #
+            # # remove tracks that are out of frame (i.e. don't match ghosts with such tracks)
+            # out_of_frame_it = []
+            # for it in u_track:
+            #     track = r_tracked_stracks[it]
+            #     tlbr = track.tlbr
+            #     if track.tracklet_len < 1 or (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height):
+            #         track.mark_lost()
+            #         lost_stracks.append(track)
+            #         out_of_frame_it.append(it)
+            #         # track.mark_removed()
+            #         # removed_stracks.append(track)
 
             detections_g = ghost_dets
 
@@ -462,9 +462,8 @@ class JDETracker(object):
             if self.frame_id > 1:
 
                 # Match unmatched tracks with matched dets (foreground tracklets)
-                # r_tracked_stracks = [r_tracked_stracks[it] for it in u_track if (it not in out_of_frame_it) and r_tracked_stracks[it].tracklet_len > 5]
-                r_tracked_stracks = [r_tracked_stracks[it] for it in u_track if (it not in out_of_frame_it)] # 78.7, 76.1
-                # r_tracked_stracks = [r_tracked_stracks[it] for it in u_track]
+                # r_tracked_stracks = [r_tracked_stracks[it] for it in u_track if (it not in out_of_frame_it)] # 78.7, 76.1
+                r_tracked_stracks = [r_tracked_stracks[it] for it in u_track]
                 dists = matching.iou_distance(r_tracked_stracks, detections_g)
                 um_det_matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
 
@@ -475,52 +474,52 @@ class JDETracker(object):
                 # Run GPN
                 for track, det in map1.items():
 
-                    track_img = track.img_patch
-                    det_img = det.img_patch
-                    track_tlbr = track.tlbr
-                    det_tlbr = det.tlbr
-                    tlwh_history = track.tlwh_buffer
+                    # track_img = track.img_patch
+                    # det_img = det.img_patch
+                    # track_tlbr = track.tlbr
+                    # det_tlbr = det.tlbr
+                    # tlwh_history = track.tlwh_buffer
+                    #
+                    # track_img = self.transforms(track_img)
+                    # det_img = self.transforms(det_img)
+                    #
+                    # track_tlbr[0] /= 1088
+                    # track_tlbr[1] /= 608
+                    # track_tlbr[2] /= 1088
+                    # track_tlbr[3] /= 608
+                    #
+                    # det_tlbr[0] /= 1088
+                    # det_tlbr[1] /= 608
+                    # det_tlbr[2] /= 1088
+                    # det_tlbr[3] /= 608
+                    #
+                    # tlwh_history = np.array(list(tlwh_history))
+                    # tlwh_history[:, 0] /= 1088
+                    # tlwh_history[:, 1] /= 608
+                    # tlwh_history[:, 2] /= 1088
+                    # tlwh_history[:, 3] /= 608
+                    #
+                    # track_img = track_img.cuda().float()
+                    # det_img = det_img.cuda().float()
+                    #
+                    # track_tlbr = torch.tensor(track_tlbr).cuda().float()
+                    # det_tlbr = torch.tensor(det_tlbr).cuda().float()
+                    # tlwh_history = torch.tensor(tlwh_history).cuda().float()
+                    #
+                    # delta_bbox_xyah = gpn(track_img.unsqueeze(0), det_img.unsqueeze(0),
+                    #                  track_tlbr.unsqueeze(0), det_tlbr.unsqueeze(0),
+                    #                  tlwh_history.unsqueeze(0))
+                    #
+                    # delta_bbox_xyah = delta_bbox_xyah[0].cpu().detach().numpy()
+                    # delta_bbox_xyah[0] *= 1088
+                    # delta_bbox_xyah[1] *= 608
+                    # delta_bbox_xyah[3] *= 608
+                    #
+                    # ghost_xyah = STrack.tlwh_to_xyah(track.tlwh) + delta_bbox_xyah
+                    # ghost_tlwh = STrack.xyah_to_tlwh(ghost_xyah)
 
-                    track_img = self.transforms(track_img)
-                    det_img = self.transforms(det_img)
-
-                    track_tlbr[0] /= 1088
-                    track_tlbr[1] /= 608
-                    track_tlbr[2] /= 1088
-                    track_tlbr[3] /= 608
-
-                    det_tlbr[0] /= 1088
-                    det_tlbr[1] /= 608
-                    det_tlbr[2] /= 1088
-                    det_tlbr[3] /= 608
-
-                    tlwh_history = np.array(list(tlwh_history))
-                    tlwh_history[:, 0] /= 1088
-                    tlwh_history[:, 1] /= 608
-                    tlwh_history[:, 2] /= 1088
-                    tlwh_history[:, 3] /= 608
-
-                    track_img = track_img.cuda().float()
-                    det_img = det_img.cuda().float()
-
-                    track_tlbr = torch.tensor(track_tlbr).cuda().float()
-                    det_tlbr = torch.tensor(det_tlbr).cuda().float()
-                    tlwh_history = torch.tensor(tlwh_history).cuda().float()
-
-                    delta_bbox_xyah = gpn(track_img.unsqueeze(0), det_img.unsqueeze(0),
-                                     track_tlbr.unsqueeze(0), det_tlbr.unsqueeze(0),
-                                     tlwh_history.unsqueeze(0))
-
-                    delta_bbox_xyah = delta_bbox_xyah[0].cpu().detach().numpy()
-                    delta_bbox_xyah[0] *= 1088
-                    delta_bbox_xyah[1] *= 608
-                    delta_bbox_xyah[3] *= 608
-
-                    ghost_xyah = STrack.tlwh_to_xyah(track.tlwh) + delta_bbox_xyah
-                    ghost_tlwh = STrack.xyah_to_tlwh(ghost_xyah)
-
-                    track.update_ghost(ghost_tlwh, self.frame_id, update_feature=False)
-                    # track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
+                    # track.update_ghost(ghost_tlwh, self.frame_id, update_feature=False)
+                    track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
                     track.ghost = True
                     activated_stracks.append(track)
 
