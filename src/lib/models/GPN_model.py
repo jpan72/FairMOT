@@ -44,9 +44,10 @@ class GPN(nn.Module):
         #     param.requires_grad = False
 
         self.vis_thres = 0.1
-        self.lstm = nn.LSTM(input_size=4, hidden_size=32, num_layers=2, batch_first=True)
-        self.lstm_reg = nn.Linear(36, 4)
-        self.current_fc = nn.Linear(4, 4)
+        self.lstm = nn.LSTM(input_size=4, hidden_size=64, num_layers=2, batch_first=True)
+        self.lstm_reg = nn.Linear(32+8, 4)
+        # self.lstm_reg = nn.Linear(64 + 8, 4)
+        self.current_fc = nn.Linear(4, 8)
 
         self.dropout = nn.Dropout()
 
