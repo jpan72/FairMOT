@@ -88,7 +88,7 @@ def train(
 
     # Initialize model
     gpn_option = "absolute"  # "absolute" or "relevant"
-    gpn = GPN(network=opt.network, gpn_option).cuda()
+    gpn = GPN(network=opt.network).cuda()
     if opt.resume:
         gpn.load_state_dict(torch.load(opt.load_path))
     else:
