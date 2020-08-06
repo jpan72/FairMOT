@@ -14,44 +14,42 @@ def tlwh_to_xyah(tlwh):
     return ret
 
 class GPN(nn.Module):
-    def __init__(self, network='alexnet'):
+    def __init__(self, network="alexnet"):
         super(GPN, self).__init__()
 
+        # Visual layers and settings
+        self.vis_thres = 0.1
         self.network = network
-        feat_dim = 256
+        self.feat_dim = 256
         self.extractor = None
-        if network == 'alexnet':
+        if network == "alexnet":
             self.extractor = alexnet(pretrained=True)
-            feat_dim = 256
-        elif network == 'resnet':
+            self.feat_dim = 256
+        elif network == "resnet":
             self.extractor = resnet18(pretrained=True)
-            feat_dim = 512
-
+            self.feat_dim = 512
         self.classifier = nn.Sequential(
             nn.Dropout(),
-            nn.Linear(2 * feat_dim * 7 * 7, 4096),
+            nn.Linear(2 * self.feat_dim * 7 * 7, 4096),
             nn.ReLU(inplace=True),
             nn.Dropout(),
             nn.Linear(4096, 4096),
             nn.ReLU(inplace=True),
             nn.Linear(4096, 4),
         )
-
-        # TODO: add classification layer and CE loss
-
-
+        # Optional: freeze extractor layers
         # for param in self.extractor.parameters():
         #     param.requires_grad = False
 
-        self.vis_thres = 0.1
-        self.lstm = nn.LSTM(input_size=4, hidden_size=64, num_layers=2, batch_first=True)
-        self.lstm_reg = nn.Linear(32+8, 4)
-        # self.lstm_reg = nn.Linear(64 + 8, 4)
-        self.current_fc = nn.Linear(4, 8)
+        # TODO: add classification layer and CE loss (?)
 
+        # LSTM and FC layers
+        self.lstm = nn.LSTM(input_size=4, hidden_size=32, num_layers=2, batch_first=True)
+        self.current_fc = nn.Linear(4, 8)
+        self.lstm_reg = nn.Linear(32+8, 4)
         self.dropout = nn.Dropout()
 
-    def forward(self, track_imgs, det_imgs, track_tlbrs, det_tlbrs, tlwh_histories):
+    def forward(self, track_imgs, det_imgs, tracks_xyah, dets_xyah, histories_xyah):
         """
         track_imgs: bs, 3, h, w
         det_imgs: bs, 3, h, w
@@ -60,34 +58,20 @@ class GPN(nn.Module):
         bbox_histories: bs, history_size, 4
         """
 
-        bs = track_tlbrs.size(0)
+        bs = tracks_xyah.size(0)
         assert bs == 1
 
-        if self.network == 'lstm':
-            track_tlwhs = track_tlbrs
-            track_tlwhs[:,2:4] -= track_tlwhs[:,0:2]
-
-            track_xyahs = tlwh_to_xyah(track_tlwhs) # bs, 4
-
-            xyah_histories = tlwh_histories
-            xyah_histories[0] = tlwh_to_xyah(xyah_histories[0])
-
-            _, (ht, _) = self.lstm(xyah_histories)
+        if self.network == "lstm":
+            _, (ht, _) = self.lstm(histories_xyah)
             ht = self.dropout(ht)
+            current_feat = self.current_fc(dets_xyah) # bs, 8
+            feat = torch.cat([ht[-1], current_feat], dim=1) # bs, 32+8
+            lstm_output_xyah = self.lstm_reg(feat) # bs, 4
 
-            current_feat = self.current_fc(track_xyahs) # bs, 4
-            feat = torch.cat([ht[-1], current_feat], dim=1) # bs, 32+4
-            lstm_delta_bboxes = self.lstm_reg(feat)
+            return lstm_output_xyah
 
-            delta_bbox = torch.zeros(track_tlbrs.size()).cuda()
-            for i in range(bs):
-                if True:
-                    delta_bbox[i] = lstm_delta_bboxes[i]
-
-
-            return delta_bbox
-
-        elif self.network == 'alexnet':
+        # Below is WIP
+        elif self.network == "alexnet":
 
             track_feat, track_featmap = self.extractor(track_imgs) # track_featmap: 1, 256, 6, 6
             det_feat, det_featmap = self.extractor(det_imgs)
@@ -123,7 +107,7 @@ class GPN(nn.Module):
 
             return delta_bbox
 
-        elif self.network == 'resnet':
+        elif self.network == "resnet":
 
             track_feat, track_featmap = self.extractor(track_imgs) # track_featmap: 1, 128, 28, 28
             det_feat, det_featmap = self.extractor(det_imgs)

@@ -22,22 +22,11 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
 def normalize_bbox(bbox, format):
-    num_dim = len(bbox.shape)
-    if num_dim == 2:
-        bbox[:, 0] /= 1088
-        bbox[:, 1] /= 608
-        if format == "tlwh" or "tlbr":
-            bbox[:, 2] /= 1088
-        bbox[:, 3] /= 608
-    elif num_dim == 3:
-        bbox[:, :, 0] /= 1088
-        bbox[:, ;, 1] /= 608
-        if format == "tlwh" or "tlbr":
-            bbox[:, :, 2] /= 1088
-        bbox[:, :, 3] /= 608
-    else:
-        ValueError("Wrong input to normalize bbox")
-
+    bbox[..., 0] /= 1088
+    bbox[..., 1] /= 608
+    if format == "tlwh" or "tlbr":
+        bbox[..., 2] /= 1088
+    bbox[..., 3] /= 608
     return bbox
 
 def tlbrs_to_tlwhs(tlbrs):
@@ -66,14 +55,14 @@ def train(
 ):
 
     # Training configs
-    weights = 'weights'
+    weights = "weights"
     if not osp.exists(weights):
         os.mkdir(weights)
-    latest = osp.join(weights, 'latest.pt')
+    latest = osp.join(weights, "latest.pt")
     torch.backends.cudnn.benchmark = True  # unsuitable for multiscale
 
     # Transform
-    if opt.network == 'alexnet':
+    if opt.network == "alexnet":
         input_size = 256
     else:
         input_size = 224
@@ -87,35 +76,36 @@ def train(
     ])
 
     # Dataloader
-    dataset_root = '../preprocess-ghost-bbox-th0.6-map-more-filter/MOT17/MOT17/train'
+    dataset_root = "../preprocess-ghost-bbox-th0.6-map-more-filter/MOT17/MOT17/train"
     dataset = GhostDataset(dataset_root, transforms)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=8)
     print("Size of training data is {}".format(len(dataloader)))
 
-    dataset_root_test = '../preprocess-ghost-bbox-th0.6-map-more-filter/2DMOT2015/train'
+    dataset_root_test = "../preprocess-ghost-bbox-th0.6-map-more-filter/2DMOT2015/train"
     dataset_test = GhostDataset(dataset_root_test, transforms)
     dataloader_test = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size, shuffle=True, num_workers=8)
     print("Size of test data is {}".format(len(dataloader_test)))
 
     # Initialize model
-    gpn = GPN(network=opt.network).cuda()
+    gpn_option = "absolute"  # "absolute" or "relevant"
+    gpn = GPN(network=opt.network, gpn_option).cuda()
     if opt.resume:
         gpn.load_state_dict(torch.load(opt.load_path))
     else:
         import torch.nn.init as weight_init
         for name, param in gpn.named_parameters():
-            if 'weight' in name:
+            if "weight" in name:
                 weight_init.normal(param);
 
     # Optimizer and loss
     start_epoch = 0
-    if opt.optim == 'sgd':
+    if opt.optim == "sgd":
         optimizer = torch.optim.SGD(filter(lambda x: x.requires_grad, gpn.parameters()), lr=opt.lr, momentum=.9,
                                     weight_decay=1e-4)
     else:
         optimizer = torch.optim.Adam(filter(lambda x: x.requires_grad, gpn.parameters()), lr=opt.lr)
     smooth_l1_loss = nn.SmoothL1Loss().cuda()
-    smooth_l1_loss_test = nn.SmoothL1Loss(reduction='sum').cuda()
+    smooth_l1_loss_test = nn.SmoothL1Loss(reduction="sum").cuda()
 
     # # If multi GPUs are needed
     # model = torch.nn.DataParallel(model)
@@ -126,15 +116,13 @@ def train(
     # model_info(gpn)
 
     # Tensorboard
-    exp_name = f'{datetime.now():%Y-%m-%d-%H:%M%z}'
-    writer = SummaryWriter(osp.join('../exp-ghost-bbox', exp_name))
+    exp_name = f"{datetime.now():%Y-%m-%d-%H:%M%z}"
+    writer = SummaryWriter(osp.join("../exp-ghost-bbox", exp_name))
     t0 = time.time()
-
-    gpn_option = "absolute"  # "absolute" or "relevant"
 
     # Run training
     for epoch in range(epochs):
-        print('Epoch {}'.format(epoch))
+        print("Epoch {}".format(epoch))
 
         # training
         gpn.train()
@@ -187,7 +175,7 @@ def train(
 
             # Compute gradient
             loss.backward()
-            writer.add_scalar('train/loss', loss.cpu().detach().numpy(), n_iter)
+            writer.add_scalar("train/loss", loss.cpu().detach().numpy(), n_iter)
 
             # Accumulate gradient for x batches before optimizing
             if ((i + 1) % accumulated_batches == 0) or (i == len(dataloader) - 1):
@@ -196,7 +184,7 @@ def train(
 
             if i % 100 == 0:
                 print()
-                print('========= Train ==========')
+                print("========= Train ==========")
                 print("Output: {}".format(gpn_output))
                 print("Target: {}".format(gpn_target))
                 print("Loss: {}".format(loss))
@@ -251,34 +239,34 @@ def train(
 
             if i % 100 == 0:
                 print()
-                print('========= Test ==========')
+                print("========= Test ==========")
                 print("Output: {}".format(gpn_output))
                 print("Target: {}".format(gpn_target))
                 print("Loss: {}".format(loss))
 
         loss_test_mean = loss_test_sum / len(dataloader_test)
-        writer.add_scalar('test/loss', loss_test_mean, n_iter)
+        writer.add_scalar("test/loss", loss_test_mean, n_iter)
 
     writer.close()
     torch.save(gpn.state_dict(), opt.save_path)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=200, help='number of epochs')
-    parser.add_argument('--batch-size', type=int, default=32, help='size of each image batch')
-    parser.add_argument('--accumulated-batches', type=int, default=2, help='number of batches before optimizer step')
-    parser.add_argument('--cfg', type=str, default='cfg/yolov3_1088x608.cfg', help='cfg file path')
-    parser.add_argument('--data-cfg', type=str, default='cfg/ccmcpe.json', help='coco.data file path')
-    parser.add_argument('--resume', action='store_true', help='resume training flag')
-    parser.add_argument('--print-interval', type=int, default=40, help='print interval')
-    parser.add_argument('--test-interval', type=int, default=9, help='test interval')
-    parser.add_argument('--lr', type=float, default=1e-2, help='init lr')
-    parser.add_argument('--unfreeze-bn', action='store_true', help='unfreeze bn')
-    parser.add_argument('--network', type=str, default='alexnet', help='alexnet or resnet')
-    parser.add_argument('--optim', type=str, default='sgd', help='optimizer')
-    parser.add_argument('--save-path', type=str, default='model.pth', help='model path')
-    parser.add_argument('--load-path', type=str, default='model.pth', help='path to load model')
+    parser.add_argument("--epochs", type=int, default=200, help="number of epochs")
+    parser.add_argument("--batch-size", type=int, default=32, help="size of each image batch")
+    parser.add_argument("--accumulated-batches", type=int, default=2, help="number of batches before optimizer step")
+    parser.add_argument("--cfg", type=str, default="cfg/yolov3_1088x608.cfg", help="cfg file path")
+    parser.add_argument("--data-cfg", type=str, default="cfg/ccmcpe.json", help="coco.data file path")
+    parser.add_argument("--resume", action="store_true", help="resume training flag")
+    parser.add_argument("--print-interval", type=int, default=40, help="print interval")
+    parser.add_argument("--test-interval", type=int, default=9, help="test interval")
+    parser.add_argument("--lr", type=float, default=1e-2, help="init lr")
+    parser.add_argument("--unfreeze-bn", action="store_true", help="unfreeze bn")
+    parser.add_argument("--network", type=str, default="alexnet", help="alexnet or resnet")
+    parser.add_argument("--optim", type=str, default="sgd", help="optimizer")
+    parser.add_argument("--save-path", type=str, default="model.pth", help="model path")
+    parser.add_argument("--load-path", type=str, default="model.pth", help="path to load model")
 
     opt = parser.parse_args()
 
