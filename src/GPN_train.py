@@ -122,7 +122,7 @@ def train(
 
     # Run training
     for epoch in range(epochs):
-        print("Epoch {}".format(epoch))
+        print("~~~~~~~~~~~~~~~~~~~~ Epoch {} ~~~~~~~~~~~~~~~~~~~~~~~~".format(epoch))
 
         # training
         gpn.train()
@@ -203,7 +203,7 @@ def train(
             histories_tlwh = normalize_bbox(histories_tlwh, "tlwh")
             target_delta_bbox_tlwh = normalize_bbox(target_delta_bbox_tlwh, "tlwh")
 
-            # Convert for tracks_xyah, dets_xyah
+            # Convert for tracks_xyah, dets_xyah, histories_xyah
             tracks_tlwh = tlbrs_to_tlwhs(tracks_tlbr)
             tracks_xyah = tlwhs_to_xyahs(tracks_tlwh)
             dets_tlwh = tlbrs_to_tlwhs(dets_tlbr)

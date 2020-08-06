@@ -17,6 +17,29 @@ from .basetrack import BaseTrack, TrackState
 import copy
 from torchvision.transforms import transforms as T
 
+
+def normalize_bbox(bbox, format):
+    bbox[..., 0] /= 1088
+    bbox[..., 1] /= 608
+    if format == "tlwh" or "tlbr":
+        bbox[..., 2] /= 1088
+    bbox[..., 3] /= 608
+    return bbox
+
+def tlbrs_to_tlwhs(tlbrs):
+    ret = tlbrs
+    ret[...,2:] -= ret[...,:2]
+    return ret
+
+def tlwhs_to_xyahs(tlwhs):
+    """Convert bounding boxes to format `(center x, center y, aspect ratio,
+    height)`, where the aspect ratio is `width / height`.
+    """
+    ret = tlwhs
+    ret[...,:2] += ret[...,2:] / 2
+    ret[...,2] /= ret[...,3]
+    return ret
+
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
     def __init__(self, tlwh, score, temp_feat, buffer_size=30, img_patch=None):
@@ -474,52 +497,56 @@ class JDETracker(object):
                 # Run GPN
                 for track, det in map1.items():
 
+                    # Get info for this (track, det) pair
                     track_img = track.img_patch
                     det_img = det.img_patch
                     track_tlbr = track.tlbr
                     det_tlbr = det.tlbr
-                    tlwh_history = track.tlwh_buffer
+                    history_tlwh = np.array(track.tlwh_buffer)
 
+                    # Transform image patches
                     track_img = self.transforms(track_img)
                     det_img = self.transforms(det_img)
 
-                    track_tlbr[0] /= 1088
-                    track_tlbr[1] /= 608
-                    track_tlbr[2] /= 1088
-                    track_tlbr[3] /= 608
+                    # Normalize bbox
+                    track_tlbr = normalize_bbox(track_tlbr, "tlbr")
+                    det_tlbr = normalize_bbox(det_tlbr, "tlbr")
+                    history_tlwh = normalize_bbox(history_tlwh, "tlwh")
 
-                    det_tlbr[0] /= 1088
-                    det_tlbr[1] /= 608
-                    det_tlbr[2] /= 1088
-                    det_tlbr[3] /= 608
+                    # Convert for tracks_xyah, dets_xyah
+                    track_tlwh = tlbrs_to_tlwhs(track_tlbr)
+                    track_xyah = tlwhs_to_xyahs(track_tlwh)
+                    det_tlwh = tlbrs_to_tlwhs(det_tlbr)
+                    det_xyah = tlwhs_to_xyahs(det_tlwh)
+                    history_xyah = tlwhs_to_xyahs(history_tlwh)
 
-                    tlwh_history = np.array(list(tlwh_history))
-                    tlwh_history[:, 0] /= 1088
-                    tlwh_history[:, 1] /= 608
-                    tlwh_history[:, 2] /= 1088
-                    tlwh_history[:, 3] /= 608
-
+                    # Move inputs and targets to GPU
                     track_img = track_img.cuda().float()
                     det_img = det_img.cuda().float()
+                    track_xyah = torch.from_numpy(track_xyah).cuda().float()
+                    det_xyah = torch.from_numpy(det_xyah).cuda().float()
+                    history_xyah = torch.from_numpy(history_xyah).cuda().float()
 
-                    track_tlbr = torch.tensor(track_tlbr).cuda().float()
-                    det_tlbr = torch.tensor(det_tlbr).cuda().float()
-                    tlwh_history = torch.tensor(tlwh_history).cuda().float()
+                    gpn_output_xyah = gpn(track_img.unsqueeze(0), det_img.unsqueeze(0),
+                                     track_xyah.unsqueeze(0), det_xyah.unsqueeze(0),
+                                     history_xyah.unsqueeze(0))
 
-                    delta_bbox_xyah = gpn(track_img.unsqueeze(0), det_img.unsqueeze(0),
-                                     track_tlbr.unsqueeze(0), det_tlbr.unsqueeze(0),
-                                     tlwh_history.unsqueeze(0))
+                    gpn_output_xyah = gpn_output_xyah[0].cpu().detach().numpy()
 
-                    delta_bbox_xyah = delta_bbox_xyah[0].cpu().detach().numpy()
-                    delta_bbox_xyah[0] *= 1088
-                    delta_bbox_xyah[1] *= 608
-                    delta_bbox_xyah[3] *= 608
+                    # Restore normalization
+                    gpn_output_xyah[0] *= 1088
+                    gpn_output_xyah[1] *= 608
+                    gpn_output_xyah[3] *= 608
 
-                    ghost_xyah = STrack.tlwh_to_xyah(track.tlwh) + delta_bbox_xyah
-                    ghost_tlwh = STrack.xyah_to_tlwh(ghost_xyah)
+                    gpn_option = "absolute"
+                    if gpn_option == "absolute":
+                        ghost_tlwh = STrack.xyah_to_tlwh(gpn_output_xyah)
+                    else:
+                        ghost_xyah = STrack.tlwh_to_xyah(track_tlwh) + gpn_output_xyah
+                        ghost_tlwh = STrack.xyah_to_tlwh(ghost_xyah)
 
                     track.update_ghost(ghost_tlwh, self.frame_id, update_feature=False)
-                    track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
+                    # track.update_ghost(track_tlwh, self.frame_id, update_feature=False)
                     track.ghost = True
                     activated_stracks.append(track)
 
