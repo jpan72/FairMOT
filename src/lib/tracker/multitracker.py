@@ -27,7 +27,7 @@ def normalize_bbox(bbox, format):
     return bbox
 
 def tlbrs_to_tlwhs(tlbrs):
-    ret = tlbrs
+    ret = copy.deepcopy(tlbrs)
     ret[...,2:] -= ret[...,:2]
     return ret
 
@@ -35,7 +35,7 @@ def tlwhs_to_xyahs(tlwhs):
     """Convert bounding boxes to format `(center x, center y, aspect ratio,
     height)`, where the aspect ratio is `width / height`.
     """
-    ret = tlwhs
+    ret = copy.deepcopy(tlwhs)
     ret[...,:2] += ret[...,2:] / 2
     ret[...,2] /= ret[...,3]
     return ret
@@ -281,7 +281,6 @@ class JDETracker(object):
         dets = ctdet_post_process(
             dets.copy(), [meta['c']], [meta['s']],
             meta['out_height'], meta['out_width'], self.opt.num_classes)
-        # import pdb; pdb.set_trace()
 
         for j in range(1, self.opt.num_classes + 1):
             dets[0][j] = np.array(dets[0][j], dtype=np.float32).reshape(-1, 5)
@@ -316,7 +315,6 @@ class JDETracker(object):
         inp_width = im_blob.shape[3]  # 1088
         c = np.array([width / 2., height / 2.], dtype=np.float32)
         s = max(float(inp_width) / float(inp_height) * height, width) * 1.0
-        # import pdb; pdb.set_trace()
         meta = {'c': c, 's': s,
                 'out_height': inp_height // self.opt.down_ratio,
                 'out_width': inp_width // self.opt.down_ratio}
@@ -330,7 +328,6 @@ class JDETracker(object):
             id_feature = F.normalize(id_feature, dim=1)
 
             reg = output['reg'] if self.opt.reg_offset else None
-            # import pdb; pdb.set_trace()
             dets, inds = mot_decode(hm, wh, reg=reg, cat_spec_wh=self.opt.cat_spec_wh, K=self.opt.K)  # dets: in 272x152 scale
             id_feature = _tranpose_and_gather_feat(id_feature, inds)
             id_feature = id_feature.squeeze(0)
@@ -520,6 +517,16 @@ class JDETracker(object):
                     det_xyah = tlwhs_to_xyahs(det_tlwh)
                     history_xyah = tlwhs_to_xyahs(history_tlwh)
 
+                    gpn_option = "rel-rel"
+                    # Differentiate history if gpn_option is "rel-rel"
+                    if gpn_option == "rel-rel":
+                        history_xyah = history_xyah[1:, :] - history_xyah[:-1, :]
+                        if history_xyah.size(1) == 0:
+                            track.update_ghost(tlbrs_to_tlwhs(track.tlbr), self.frame_id, update_feature=False)
+                            track.ghost = True
+                            activated_stracks.append(track)
+                            continue
+
                     # Move inputs and targets to GPU
                     track_img = track_img.cuda().float()
                     det_img = det_img.cuda().float()
@@ -538,8 +545,7 @@ class JDETracker(object):
                     gpn_output_xyah[1] *= 608
                     gpn_output_xyah[3] *= 608
 
-                    gpn_option = "absolute"
-                    if gpn_option == "absolute":
+                    if gpn_option == "abs":
                         ghost_tlwh = STrack.xyah_to_tlwh(gpn_output_xyah)
                     else:
                         ghost_xyah = STrack.tlwh_to_xyah(track_tlwh) + gpn_output_xyah
