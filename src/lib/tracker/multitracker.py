@@ -521,7 +521,7 @@ class JDETracker(object):
                     # Differentiate history if gpn_option is "rel-rel"
                     if gpn_option == "rel-rel":
                         history_xyah = history_xyah[1:, :] - history_xyah[:-1, :]
-                        if history_xyah.size(1) == 0:
+                        if history_xyah.shape[0] == 0:
                             track.update_ghost(tlbrs_to_tlwhs(track.tlbr), self.frame_id, update_feature=False)
                             track.ghost = True
                             activated_stracks.append(track)
