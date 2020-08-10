@@ -89,7 +89,7 @@ def train(
     print("Size of test data is {}".format(len(dataloader_test)))
 
     # Initialize model
-    gpn_option = "abs-abs"  # "abs-abs", "abs-rel", or "rel-rel"
+    gpn_option = "abs-rel"  # "abs-abs", "abs-rel", or "rel-rel"
     gpn_bbox_format = "xyah" # tlwh or xyah
 
     gpn = GPN(network=opt.network).cuda()
@@ -157,11 +157,11 @@ def train(
                 FNs_tlwh = tracks_tlwh + target_delta_bbox_tlwh
                 target_bbox_tlwh = FNs_tlwh
 
-                # If input is relevant
+                # If input is relative
                 if gpn_option == "rel-rel":
                         histories_tlwh = histories_tlwh[:,1:,:] - histories_tlwh[:,:-1,:]
 
-                # If output is relevant
+                # If output is relative
                 if gpn_option == "abs-rel" or "rel-rel":
                     target_delta_bbox_tlwh = target_bbox_tlwh - tracks_tlwh
 
@@ -198,11 +198,11 @@ def train(
                 target_bbox_tlwh = FNs_tlwh
                 target_bbox_xyah = tlwhs_to_xyahs(target_bbox_tlwh)
 
-                # If input is relevant
+                # If input is relative
                 if gpn_option == "rel-rel":
                         histories_xyah = histories_xyah[:,1:,:] - histories_xyah[:,:-1,:]
 
-                # If output is relevant
+                # If output is relative
                 if gpn_option == "abs-rel" or "rel-rel":
                     target_delta_bbox_xyah = target_bbox_xyah - tracks_xyah
 
@@ -279,10 +279,10 @@ def train(
 
             if gpn_option == "absolute":
                 gpn_target = target_bbox_xyah
-            elif gpn_option == "relevant":
+            elif gpn_option == "relative":
                 gpn_target = target_delta_bbox_xyah
             else:
-                ValueError("gpu_option must be `absolute` or `relevant`")
+                ValueError("gpu_option must be `absolute` or `relative`")
             gpn_target = gpn_target.cuda().float()
 
             # Run GPN and computer loss

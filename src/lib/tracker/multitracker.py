@@ -519,62 +519,69 @@ class JDETracker(object):
                     det_tlbr = normalize_bbox(det_tlbr, "tlbr")
                     history_tlwh = normalize_bbox(history_tlwh, "tlwh")
 
-                    # Convert for tracks_xyah, dets_xyah
+                    # Convert track_tlbr and det_tlbr to tlwh
                     track_tlwh = tlbrs_to_tlwhs(track_tlbr)
                     det_tlwh = tlbrs_to_tlwhs(det_tlbr)
-                    if gpn_bbox_format == "xyah":
+
+                    if gpn_bbox_format == "tlwh":
+
+                        # If input is relative
+                        if gpn_option == "rel-rel":
+                            history_tlwh = history_tlwh[1:, :] - history_tlwh[:-1, :]
+
+                        # Move inputs to GPU
+                        track_img = track_img.cuda().float()
+                        det_img = det_img.cuda().float()
+                        track_tlwh = torch.from_numpy(track_tlwh).cuda().float()
+                        det_tlwh = torch.from_numpy(det_tlwh).cuda().float()
+                        history_tlwh = torch.from_numpy(history_tlwh).cuda().float()
+
+                        # Run inference
+                        gpn_output_tlwh = gpn(track_img.unsqueeze(0), det_img.unsqueeze(0),
+                                         track_tlwh.unsqueeze(0), det_tlwh.unsqueeze(0),
+                                         history_tlwh.unsqueeze(0))
+                        gpn_output_tlwh = gpn_output_tlwh[0].cpu().detach().numpy()
+
+                        # If output is relative
+                        if gpn_option == "abs-abs":
+                            ghost_tlwh = gpn_output_tlwh
+                        else:
+                            ghost_tlwh = track_tlwh + gpn_output_tlwh # both normalized
+
+                    elif gpn_bbox_format == "xyah":
+
+                        # Get xyah for inputs
                         track_xyah = tlwhs_to_xyahs(track_tlwh)
                         det_xyah = tlwhs_to_xyahs(det_tlwh)
                         history_xyah = tlwhs_to_xyahs(history_tlwh)
 
-                    # Differentiate history if gpn_option is "rel-rel"
-                    if gpn_option == "rel-rel":
-                        if gpn_bbox_format == "xyah":
+                        # If input is relative
+                        if gpn_option == "rel-rel":
                             history_xyah = history_xyah[1:, :] - history_xyah[:-1, :]
-                        elif gpn_bbox_format == "tlwh":
-                            history_tlwh = history_tlwh[1:, :] - history_tlwh[:-1, :]
 
-                    # Move inputs and targets to GPU
-                    track_img = track_img.cuda().float()
-                    det_img = det_img.cuda().float()
-                    if gpn_bbox_format == "xyah":
+                        # Move inputs to GPU
+                        track_img = track_img.cuda().float()
+                        det_img = det_img.cuda().float()
                         track_xyah = torch.from_numpy(track_xyah).cuda().float()
                         det_xyah = torch.from_numpy(det_xyah).cuda().float()
                         history_xyah = torch.from_numpy(history_xyah).cuda().float()
+
+                        # Run inference
                         gpn_output_xyah = gpn(track_img.unsqueeze(0), det_img.unsqueeze(0),
                                          track_xyah.unsqueeze(0), det_xyah.unsqueeze(0),
                                          history_xyah.unsqueeze(0))
-
                         gpn_output_xyah = gpn_output_xyah[0].cpu().detach().numpy()
-                        # Restore normalization
-                        gpn_output_xyah[0] *= 1088
-                        gpn_output_xyah[1] *= 608
-                        gpn_output_xyah[3] *= 608
 
+                        # If output is relative
                         if gpn_option == "abs-abs":
                             ghost_tlwh = STrack.xyah_to_tlwh(gpn_output_xyah)
                         else:
-                            ghost_xyah = STrack.tlwh_to_xyah(track_tlwh) + gpn_output_xyah
+                            ghost_xyah = track_xyah + gpn_output_xyah # both normalized
                             ghost_tlwh = STrack.xyah_to_tlwh(ghost_xyah)
 
-
-                    elif gpn_bbox_format == "tlwh":
-                        track_tlwh = torch.from_numpy(track_tlwh).cuda().float()
-                        det_tlwh = torch.from_numpy(det_tlwh).cuda().float()
-                        history_tlwh = torch.from_numpy(history_tlwh).cuda().float()
-                        gpn_output_tlwh = gpn(track_img.unsqueeze(0), det_img.unsqueeze(0),
-                                              track_tlwh.unsqueeze(0), det_tlwh.unsqueeze(0),
-                                              history_tlwh.unsqueeze(0))
-                        gpn_output_tlwh = gpn_output_tlwh[0].cpu().detach().numpy()
-                        # Restore normalization
-                        gpn_output_tlwh[[0,2]] *= 1088
-                        gpn_output_tlwh[[1,3]] *= 608
-
-                        if gpn_option == "abs-abs":
-                            ghost_tlwh = gpn_output_tlwh
-                        else:
-                            ghost_tlwh = tlbrs_to_tlwhs(track_tlbr) + gpn_output_tlwh
-
+                    # Restore normalization
+                    ghost_tlwh[:,[0.2]] *= 1088
+                    ghost_tlwh[:,[1,3]] *= 608
 
                     track.update_ghost(ghost_tlwh, self.frame_id, update_feature=False)
                     # track.update_ghost(track_tlwh, self.frame_id, update_feature=False)
