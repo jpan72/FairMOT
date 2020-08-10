@@ -22,13 +22,14 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
 def normalize_bbox(bbox, format):
-    bbox[..., 0] /= 1088
-    bbox[..., 1] /= 608
+    ret = bbox.clone()
+    ret[..., 0] /= 1088
+    ret[..., 1] /= 608
     # import pdb; pdb.set_trace()
     if format in ["tlwh", "tlbr"]:
-        bbox[..., 2] /= 1088
-    bbox[..., 3] /= 608
-    return bbox
+        ret[..., 2] /= 1088
+    ret[..., 3] /= 608
+    return ret
 
 def tlbrs_to_tlwhs(tlbrs):
     ret = tlbrs.clone()
@@ -88,7 +89,9 @@ def train(
     print("Size of test data is {}".format(len(dataloader_test)))
 
     # Initialize model
-    gpn_option = "rel-rel"  # "abs-abs", "abs-rel", or "rel-rel"
+    gpn_option = "abs-abs"  # "abs-abs", "abs-rel", or "rel-rel"
+    gpn_bbox_format = "xyah" # tlwh or xyah
+
     gpn = GPN(network=opt.network).cuda()
     if opt.resume:
         gpn.load_state_dict(torch.load(opt.load_path))
@@ -133,6 +136,9 @@ def train(
         for i, (track_imgs, det_imgs, tracks_tlbr, dets_tlbr, histories_tlwh, target_delta_bbox_tlwh) in enumerate(
                 dataloader):
 
+            if gpn_option == "rel-rel" and histories_tlwh.size(1) == 1:
+                continue
+
             n_iter = epoch * len(dataloader) + i
 
             # Normalize
@@ -143,40 +149,65 @@ def train(
 
             # Convert for tracks_xyah, dets_xyah
             tracks_tlwh = tlbrs_to_tlwhs(tracks_tlbr)
-            tracks_xyah = tlwhs_to_xyahs(tracks_tlwh)
             dets_tlwh = tlbrs_to_tlwhs(dets_tlbr)
-            dets_xyah = tlwhs_to_xyahs(dets_tlwh)
-            histories_xyah = tlwhs_to_xyahs(histories_tlwh)
-
-            if gpn_option == "rel-rel":
-                histories_xyah = histories_xyah[:,1:,:] - histories_xyah[:,:-1,:]
-                if histories_xyah.size(1) == 0:
-                    continue
+            if gpn_bbox_format == "xyah":
+                tracks_xyah = tlwhs_to_xyahs(tracks_tlwh)
+                dets_xyah = tlwhs_to_xyahs(dets_tlwh)
+                histories_xyah = tlwhs_to_xyahs(histories_tlwh)
 
             # Restore FNs_tlwh and convert to FNs_xyah
             # in order to get target_bbox_xyah and target_delta_bbox_xyah
             FNs_tlwh = tracks_tlwh + target_delta_bbox_tlwh
-            FNs_xyah = tlwhs_to_xyahs(FNs_tlwh)
-            target_bbox_xyah = FNs_xyah
-            target_delta_bbox_xyah = FNs_xyah - tracks_xyah
+            target_bbox_tlwh = FNs_tlwh
+            target_bbox_xyah = tlwhs_to_xyahs(target_bbox_tlwh)
+
+            # If input is relevant
+            if gpn_option == "rel-rel":
+                if gpn_bbox_format == "xyah":
+                    histories_xyah = histories_xyah[:,1:,:] - histories_xyah[:,:-1,:]
+
+                elif gpn_bbox_format == "tlwh":
+                    histories_tlwh = histories_tlwh[:,1:,:] - histories_tlwh[:,:-1,:]
+
+            # If output is relevant
+            if gpn_option == "abs-rel" or "rel-rel":
+                if gpn_bbox_format == "xyah":
+                    target_delta_bbox_xyah = target_bbox_xyah - tracks_xyah
+                elif gpn_bbox_format == "tlwh":
+                    target_delta_bbox_tlwh = target_bbox_tlwh - tracks_tlwh
 
             # Move inputs and targets to GPU
             track_imgs = track_imgs.cuda().float()
             det_imgs = det_imgs.cuda().float()
-            tracks_xyah = tracks_xyah.cuda().float()
-            dets_xyah = dets_xyah.cuda().float()
-            histories_xyah = histories_xyah.cuda().float()
+            if gpn_bbox_format == "xyah":
+                tracks_xyah = tracks_xyah.cuda().float()
+                dets_xyah = dets_xyah.cuda().float()
+                histories_xyah = histories_xyah.cuda().float()
+            elif gpn_bbox_format == "tlwh":
+                tracks_tlwh = tracks_tlwh.cuda().float()
+                dets_tlwh = dets_tlwh.cuda().float()
+                histories_tlwh = histories_tlwh.cuda().float()
 
             if gpn_option == "abs-abs":
-                gpn_target = target_bbox_xyah
+                if gpn_bbox_format == "xyah":
+                    gpn_target = target_bbox_xyah
+                elif gpn_bbox_format == "tlwh":
+                    gpn_target = target_bbox_tlwh
             elif gpn_option in ["abs-rel", "rel-rel"]:
-                gpn_target = target_delta_bbox_xyah
+                if gpn_bbox_format == "xyah":
+                    gpn_target = target_delta_bbox_xyah
+                elif gpn_bbox_format == "tlwh":
+                    gpn_target = target_delta_bbox_tlwh
+
             else:
                 ValueError("gpu_option must be `abs-abs`, `abs-rel`, or `rel-rel")
             gpn_target = gpn_target.cuda().float()
 
             # Run GPN and computer loss
-            gpn_output = gpn(track_imgs, det_imgs, tracks_xyah, dets_xyah, histories_xyah)
+            if gpn_bbox_format == "xyah":
+                gpn_output = gpn(track_imgs, det_imgs, tracks_xyah, dets_xyah, histories_xyah)
+            elif gpn_bbox_format == "tlwh":
+                gpn_output = gpn(track_imgs, det_imgs, tracks_tlwh, dets_tlwh, histories_tlwh)
             loss = smooth_l1_loss(gpn_output, gpn_target)
 
             # Compute gradient

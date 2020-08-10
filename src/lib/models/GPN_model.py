@@ -45,8 +45,8 @@ class GPN(nn.Module):
 
         # LSTM and FC layers
         self.lstm = nn.LSTM(input_size=4, hidden_size=32, num_layers=2, batch_first=True)
-        self.current_fc = nn.Linear(4, 8)
-        self.lstm_reg = nn.Linear(32+8, 4)
+        self.current_fc = nn.Linear(4, 4)
+        self.lstm_reg = nn.Linear(32+4, 4)
         self.dropout = nn.Dropout()
 
     def forward(self, track_imgs, det_imgs, tracks_xyah, dets_xyah, histories_xyah):

@@ -19,12 +19,13 @@ from torchvision.transforms import transforms as T
 
 
 def normalize_bbox(bbox, format):
-    bbox[..., 0] /= 1088
-    bbox[..., 1] /= 608
+    ret = copy.deepcopy(bbox)
+    ret[..., 0] /= 1088
+    ret[..., 1] /= 608
     if format == "tlwh" or "tlbr":
-        bbox[..., 2] /= 1088
-    bbox[..., 3] /= 608
-    return bbox
+        ret[..., 2] /= 1088
+    ret[..., 3] /= 608
+    return ret
 
 def tlbrs_to_tlwhs(tlbrs):
     ret = copy.deepcopy(tlbrs)
@@ -493,6 +494,14 @@ class JDETracker(object):
 
                 # Run GPN
                 for track, det in map1.items():
+                    gpn_option = "abs-abs"
+                    gpn_bbox_format = "xyah"
+
+                    if gpn_option == "rel-rel" and history_tlwh.shape[0] == 1:
+                        track.update_ghost(tlbrs_to_tlwhs(track.tlbr), self.frame_id, update_feature=False)
+                        track.ghost = True
+                        activated_stracks.append(track)
+                        continue
 
                     # Get info for this (track, det) pair
                     track_img = track.img_patch
@@ -512,44 +521,60 @@ class JDETracker(object):
 
                     # Convert for tracks_xyah, dets_xyah
                     track_tlwh = tlbrs_to_tlwhs(track_tlbr)
-                    track_xyah = tlwhs_to_xyahs(track_tlwh)
                     det_tlwh = tlbrs_to_tlwhs(det_tlbr)
-                    det_xyah = tlwhs_to_xyahs(det_tlwh)
-                    history_xyah = tlwhs_to_xyahs(history_tlwh)
+                    if gpn_bbox_format == "xyah":
+                        track_xyah = tlwhs_to_xyahs(track_tlwh)
+                        det_xyah = tlwhs_to_xyahs(det_tlwh)
+                        history_xyah = tlwhs_to_xyahs(history_tlwh)
 
-                    gpn_option = "rel-rel"
                     # Differentiate history if gpn_option is "rel-rel"
                     if gpn_option == "rel-rel":
-                        history_xyah = history_xyah[1:, :] - history_xyah[:-1, :]
-                        if history_xyah.shape[0] == 0:
-                            track.update_ghost(tlbrs_to_tlwhs(track.tlbr), self.frame_id, update_feature=False)
-                            track.ghost = True
-                            activated_stracks.append(track)
-                            continue
+                        if gpn_bbox_format == "xyah":
+                            history_xyah = history_xyah[1:, :] - history_xyah[:-1, :]
+                        elif gpn_bbox_format == "tlwh":
+                            history_tlwh = history_tlwh[1:, :] - history_tlwh[:-1, :]
 
                     # Move inputs and targets to GPU
                     track_img = track_img.cuda().float()
                     det_img = det_img.cuda().float()
-                    track_xyah = torch.from_numpy(track_xyah).cuda().float()
-                    det_xyah = torch.from_numpy(det_xyah).cuda().float()
-                    history_xyah = torch.from_numpy(history_xyah).cuda().float()
+                    if gpn_bbox_format == "xyah":
+                        track_xyah = torch.from_numpy(track_xyah).cuda().float()
+                        det_xyah = torch.from_numpy(det_xyah).cuda().float()
+                        history_xyah = torch.from_numpy(history_xyah).cuda().float()
+                        gpn_output_xyah = gpn(track_img.unsqueeze(0), det_img.unsqueeze(0),
+                                         track_xyah.unsqueeze(0), det_xyah.unsqueeze(0),
+                                         history_xyah.unsqueeze(0))
 
-                    gpn_output_xyah = gpn(track_img.unsqueeze(0), det_img.unsqueeze(0),
-                                     track_xyah.unsqueeze(0), det_xyah.unsqueeze(0),
-                                     history_xyah.unsqueeze(0))
+                        gpn_output_xyah = gpn_output_xyah[0].cpu().detach().numpy()
+                        # Restore normalization
+                        gpn_output_xyah[0] *= 1088
+                        gpn_output_xyah[1] *= 608
+                        gpn_output_xyah[3] *= 608
 
-                    gpn_output_xyah = gpn_output_xyah[0].cpu().detach().numpy()
+                        if gpn_option == "abs-abs":
+                            ghost_tlwh = STrack.xyah_to_tlwh(gpn_output_xyah)
+                        else:
+                            ghost_xyah = STrack.tlwh_to_xyah(track_tlwh) + gpn_output_xyah
+                            ghost_tlwh = STrack.xyah_to_tlwh(ghost_xyah)
 
-                    # Restore normalization
-                    gpn_output_xyah[0] *= 1088
-                    gpn_output_xyah[1] *= 608
-                    gpn_output_xyah[3] *= 608
 
-                    if gpn_option == "abs":
-                        ghost_tlwh = STrack.xyah_to_tlwh(gpn_output_xyah)
-                    else:
-                        ghost_xyah = STrack.tlwh_to_xyah(track_tlwh) + gpn_output_xyah
-                        ghost_tlwh = STrack.xyah_to_tlwh(ghost_xyah)
+                    elif gpn_bbox_format == "tlwh":
+                        track_tlwh = torch.from_numpy(track_tlwh).cuda().float()
+                        det_tlwh = torch.from_numpy(det_tlwh).cuda().float()
+                        history_tlwh = torch.from_numpy(history_tlwh).cuda().float()
+                        gpn_output_tlwh = gpn(track_img.unsqueeze(0), det_img.unsqueeze(0),
+                                              track_tlwh.unsqueeze(0), det_tlwh.unsqueeze(0),
+                                              history_tlwh.unsqueeze(0))
+                        gpn_output_tlwh = gpn_output_tlwh[0].cpu().detach().numpy()
+                        # Restore normalization
+                        gpn_output_tlwh[[0,2]] *= 1088
+                        gpn_output_tlwh[[1,3]] *= 608
+
+                        if gpn_option == "abs-abs":
+                            ghost_tlwh = gpn_output_tlwh
+                        else:
+                            ghost_tlwh = tlbrs_to_tlwhs(track_tlbr) + gpn_output_tlwh
+
 
                     track.update_ghost(ghost_tlwh, self.frame_id, update_feature=False)
                     # track.update_ghost(track_tlwh, self.frame_id, update_feature=False)
