@@ -147,70 +147,86 @@ def train(
             histories_tlwh = normalize_bbox(histories_tlwh, "tlwh")
             target_delta_bbox_tlwh = normalize_bbox(target_delta_bbox_tlwh, "tlwh")
 
-            # Convert for tracks_xyah, dets_xyah
+            # Convert tracks_tlbr and dets_tlbr to tlwh anyways
             tracks_tlwh = tlbrs_to_tlwhs(tracks_tlbr)
             dets_tlwh = tlbrs_to_tlwhs(dets_tlbr)
-            if gpn_bbox_format == "xyah":
-                tracks_xyah = tlwhs_to_xyahs(tracks_tlwh)
-                dets_xyah = tlwhs_to_xyahs(dets_tlwh)
-                histories_xyah = tlwhs_to_xyahs(histories_tlwh)
 
-            # Restore FNs_tlwh and convert to FNs_xyah
-            # in order to get target_bbox_xyah and target_delta_bbox_xyah
-            FNs_tlwh = tracks_tlwh + target_delta_bbox_tlwh
-            target_bbox_tlwh = FNs_tlwh
-            target_bbox_xyah = tlwhs_to_xyahs(target_bbox_tlwh)
+            if gpn_bbox_format == "tlwh":
 
-            # If input is relevant
-            if gpn_option == "rel-rel":
-                if gpn_bbox_format == "xyah":
-                    histories_xyah = histories_xyah[:,1:,:] - histories_xyah[:,:-1,:]
+                # Restore FNs_tlwh
+                FNs_tlwh = tracks_tlwh + target_delta_bbox_tlwh
+                target_bbox_tlwh = FNs_tlwh
 
-                elif gpn_bbox_format == "tlwh":
-                    histories_tlwh = histories_tlwh[:,1:,:] - histories_tlwh[:,:-1,:]
+                # If input is relevant
+                if gpn_option == "rel-rel":
+                        histories_tlwh = histories_tlwh[:,1:,:] - histories_tlwh[:,:-1,:]
 
-            # If output is relevant
-            if gpn_option == "abs-rel" or "rel-rel":
-                if gpn_bbox_format == "xyah":
-                    target_delta_bbox_xyah = target_bbox_xyah - tracks_xyah
-                elif gpn_bbox_format == "tlwh":
+                # If output is relevant
+                if gpn_option == "abs-rel" or "rel-rel":
                     target_delta_bbox_tlwh = target_bbox_tlwh - tracks_tlwh
 
-            # Move inputs and targets to GPU
-            track_imgs = track_imgs.cuda().float()
-            det_imgs = det_imgs.cuda().float()
-            if gpn_bbox_format == "xyah":
-                tracks_xyah = tracks_xyah.cuda().float()
-                dets_xyah = dets_xyah.cuda().float()
-                histories_xyah = histories_xyah.cuda().float()
-            elif gpn_bbox_format == "tlwh":
+                # Move inputs to GPU
+                track_imgs = track_imgs.cuda().float()
+                det_imgs = det_imgs.cuda().float()
                 tracks_tlwh = tracks_tlwh.cuda().float()
                 dets_tlwh = dets_tlwh.cuda().float()
                 histories_tlwh = histories_tlwh.cuda().float()
 
-            if gpn_option == "abs-abs":
-                if gpn_bbox_format == "xyah":
-                    gpn_target = target_bbox_xyah
-                elif gpn_bbox_format == "tlwh":
+                # Move target to GPU
+                if gpn_option == "abs-abs":
                     gpn_target = target_bbox_tlwh
-            elif gpn_option in ["abs-rel", "rel-rel"]:
-                if gpn_bbox_format == "xyah":
-                    gpn_target = target_delta_bbox_xyah
-                elif gpn_bbox_format == "tlwh":
+                elif gpn_option in ["abs-rel", "rel-rel"]:
                     gpn_target = target_delta_bbox_tlwh
+                else:
+                    ValueError("gpu_option must be `abs-abs`, `abs-rel`, or `rel-rel")
+                gpn_target = gpn_target.cuda().float()
 
-            else:
-                ValueError("gpu_option must be `abs-abs`, `abs-rel`, or `rel-rel")
-            gpn_target = gpn_target.cuda().float()
-
-            # Run GPN and computer loss
-            if gpn_bbox_format == "xyah":
-                gpn_output = gpn(track_imgs, det_imgs, tracks_xyah, dets_xyah, histories_xyah)
-            elif gpn_bbox_format == "tlwh":
+                # Run GPN and computer loss
                 gpn_output = gpn(track_imgs, det_imgs, tracks_tlwh, dets_tlwh, histories_tlwh)
-            loss = smooth_l1_loss(gpn_output, gpn_target)
 
-            # Compute gradient
+
+            elif gpn_bbox_format == "xyah":
+
+                # Convert inputs for xyah
+                tracks_xyah = tlwhs_to_xyahs(tracks_tlwh)
+                dets_xyah = tlwhs_to_xyahs(dets_tlwh)
+                histories_xyah = tlwhs_to_xyahs(histories_tlwh)
+
+                # Restore FNs_tlwh and convert to FNs_xyah
+                # in order to get target_bbox_xyah and target_delta_bbox_xyah
+                FNs_tlwh = tracks_tlwh + target_delta_bbox_tlwh
+                target_bbox_tlwh = FNs_tlwh
+                target_bbox_xyah = tlwhs_to_xyahs(target_bbox_tlwh)
+
+                # If input is relevant
+                if gpn_option == "rel-rel":
+                        histories_xyah = histories_xyah[:,1:,:] - histories_xyah[:,:-1,:]
+
+                # If output is relevant
+                if gpn_option == "abs-rel" or "rel-rel":
+                    target_delta_bbox_xyah = target_bbox_xyah - tracks_xyah
+
+                # Move inputs to GPU
+                track_imgs = track_imgs.cuda().float()
+                det_imgs = det_imgs.cuda().float()
+                tracks_xyah = tracks_xyah.cuda().float()
+                dets_xyah = dets_xyah.cuda().float()
+                histories_xyah = histories_xyah.cuda().float()
+
+                # Move target to GPU
+                if gpn_option == "abs-abs":
+                    gpn_target = target_bbox_xyah
+                elif gpn_option in ["abs-rel", "rel-rel"]:
+                    gpn_target = target_delta_bbox_xyah
+                else:
+                    ValueError("gpu_option must be `abs-abs`, `abs-rel`, or `rel-rel")
+                gpn_target = gpn_target.cuda().float()
+
+                # Run GPN and computer loss
+                gpn_output = gpn(track_imgs, det_imgs, tracks_xyah, dets_xyah, histories_xyah)
+
+            # Compute loss and gradient
+            loss = smooth_l1_loss(gpn_output, gpn_target)
             loss.backward()
             writer.add_scalar("train/loss", loss.cpu().detach().numpy(), n_iter)
 
