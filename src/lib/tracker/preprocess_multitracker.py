@@ -20,7 +20,7 @@ import copy
 
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
-    def __init__(self, tlwh, score, temp_feat, buffer_size=30):
+    def __init__(self, tlwh, score, temp_feat, buffer_size=30, img_patch=None):
 
         # wait activate
         self._tlwh = np.asarray(tlwh, dtype=np.float)
@@ -36,6 +36,10 @@ class STrack(BaseTrack):
         self.update_features(temp_feat)
         self.features = deque([], maxlen=buffer_size)
         self.alpha = 0.9
+
+        self.history_len = 10
+        self.tlwh_buffer = deque([], maxlen=self.history_len)
+        self.img_patch = img_patch
 
     def update_features(self, feat):
         feat /= np.linalg.norm(feat)
@@ -92,6 +96,8 @@ class STrack(BaseTrack):
         self.frame_id = frame_id
         if new_id:
             self.track_id = self.next_id()
+        self.tlwh_buffer = deque([], maxlen=self.history_len)
+        self.tlwh_buffer.append(new_track.tlwh)
 
     def update(self, new_track, frame_id, update_feature=True):
         """
@@ -114,6 +120,8 @@ class STrack(BaseTrack):
         self.score = new_track.score
         if update_feature:
             self.update_features(new_track.curr_feat)
+        self.tlwh_buffer.append(new_track.tlwh)
+        self.img_patch = new_track.img_patch
 
     def update_ghost(self, ghost_tlwh, frame_id, update_feature=True, var_multiplier=1):
         """
@@ -138,7 +146,29 @@ class STrack(BaseTrack):
         # self.score = new_track.score
         # if update_feature:
         #     self.update_features(new_track.curr_feat)
-        # self.tlwh_buffer.append(ghost_tlwh)
+        self.tlwh_buffer.append(ghost_tlwh)
+
+    def update_FN(self, FN_tlwh, frame_id, FN_img_patch, update_feature=False, update_kf=True, var_multiplier=1):
+        """
+        Update a matched track
+        :type new_track: STrack
+        :type frame_id: int
+        :type update_feature: bool
+        :return:
+        """
+        self.frame_id = frame_id
+        self.tracklet_len += 1
+
+        if update_kf:
+            new_tlwh = FN_tlwh
+            self.mean, self.covariance = self.kalman_filter.update(
+                self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh))
+        self.state = TrackState.Tracked
+        self.is_activated = True
+        self.tlwh_buffer.append(FN_tlwh)
+
+        self.score = 1
+        self.img_patch = FN_img_patch #?
 
     @property
     # @jit(nopython=True)
@@ -291,6 +321,26 @@ class JDETracker(object):
         dets = dets[remain_inds]
         id_feature = id_feature[remain_inds]
 
+        # Get image patch
+        bbox = np.rint(dets[:, :4]).astype(int)
+        bbox_x, bbox_y, bbox_w, bbox_h = bbox[:, 0], bbox[:, 1], bbox[:, 2], bbox[:, 3]
+        h0, w0, _ = img0.shape
+
+        bbox_x[bbox_x > w0] = w0
+        bbox_x[bbox_x < 0] = 0
+        bbox_y[bbox_y > h0] = h0
+        bbox_y[bbox_y < 0] = 0
+
+        h_rs = 224
+        w_rs = 224
+        img_patches = []
+        for x, y, w, h in zip(bbox_x, bbox_y, bbox_w, bbox_h):
+            tmp = img0[y:y + h, x:x + w, :]
+            tmp = np.ascontiguousarray(tmp)
+            import cv2
+            tmp = cv2.resize(tmp, (h_rs, w_rs))
+            img_patches.append(tmp)
+
         # vis
         '''
         for i in range(0, dets.shape[0]):
@@ -305,8 +355,8 @@ class JDETracker(object):
 
         if len(dets) > 0:
             '''Detections'''
-            detections = [STrack(STrack.tlbr_to_tlwh(tlbrs[:4]), tlbrs[4], f, 30) for
-                          (tlbrs, f) in zip(dets[:, :5], id_feature)]
+            detections = [STrack(STrack.tlbr_to_tlwh(tlbrs[:4]), tlbrs[4], f, 30, p) for
+                          (tlbrs, f, p) in zip(dets[:, :5], id_feature, img_patches)]
         else:
             detections = []
 
@@ -413,29 +463,131 @@ class JDETracker(object):
                 # r_tracked_stracks = [r_tracked_stracks[it] for it in u_track if (it not in out_of_frame_it) and r_tracked_stracks[it].tracklet_len > 5]
                 r_tracked_stracks = [r_tracked_stracks[it] for it in u_track if (it not in out_of_frame_it)] # 78.7, 76.1
                 # r_tracked_stracks = [r_tracked_stracks[it] for it in u_track]
-                dists = matching.iou_distance(r_tracked_stracks, detections_g)
-                um_det_matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
+                if False:
+                    dists = matching.iou_distance(r_tracked_stracks, detections_g)
+                    # um_det_matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
+                    um_det_matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
 
-                map1 = {}
-                for um, det in um_det_matches:
-                    map1[r_tracked_stracks[um]] = detections_g[det]
-                # if len(map1) > 0:
-                #     print(map1.keys())
+                    map1 = {}
+                    for um, det in um_det_matches:
+                        map1[r_tracked_stracks[um]] = detections_g[det]
+                    # if len(map1) > 0:
+                    #     print(map1.keys())
 
-                # Activate ghost tracks that get paired with ghost detections
-                for track, det in map1.items():
-                    track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
-                    activated_stracks.append(track)
-                    # ghost_tlbrs.append(track.tlbr)
+                    # Activate ghost tracks that get paired with ghost detections
+                    for track, det in map1.items():
+                        track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
+                        activated_stracks.append(track)
+                        # ghost_tlbrs.append(track.tlbr)
 
         # =========================================
+        ''' Collect data for GPN'''
 
-        '''Mark unmatched tracks as lost'''
-        for it in u_track:
-            track = r_tracked_stracks[it]
-            if not track.state == TrackState.Lost:
-                track.mark_lost()
-                lost_stracks.append(track)
+        prefix = path.split('img1')[0]
+        # if opt.use_featmap:
+        if False:
+            dataset_root = '../preprocess-ghost-bbox-fairmot-conf0.8-occ{}/'.format(opt.occ_reason_thres)
+        else:
+            dataset_root = '../preprocess-ghost-bbox-th0.5-fairmot-conf{}/'.format(opt.conf_thres)
+        save_dir = osp.join(prefix, 'preprocess').replace(opt.data_dir, dataset_root)
+        if not osp.exists(save_dir):
+            os.makedirs(save_dir)
+        save_path = path.replace(opt.data_dir, dataset_root).replace('img1', 'preprocess').replace('.png', '').replace('.jpg', '')
+
+        cur_output_stracks = [track for track in activated_stracks if
+                          track.is_activated and track.state == TrackState.Tracked]
+        trk_tlwhs = [track.tlwh for track in cur_output_stracks]
+        trk_ids = [track.track_id for track in cur_output_stracks]
+        # trk_ids = np.arange(len(trk_tlwhs))
+        print(self.frame_id)
+        evaluator.eval_frame(self.frame_id, trk_tlwhs, trk_ids, rtn_events=False)
+
+        FN_tlbrs_selected = []
+        tracks_selected = []
+
+        before_boxes = []
+        after_boxs = []
+
+        # frame_id:       1, 2, 3, 4
+        # acc_event key:     0, 1, 2 #把上面3的结果提前拿到acc=1里去测试哪些missing
+        # gt dict(1-idx):    1, 2, 3
+
+        if self.frame_id > 2: # = 3
+
+            acc_frame = evaluator.acc.mot_events.loc[self.frame_id-2] # =1 ok
+            miss_rows = acc_frame[acc_frame.Type.eq('MISS')]
+            miss_OIds = miss_rows.OId.values
+
+            gt_objs = evaluator.gt_frame_dict.get(self.frame_id-1, []) # =2
+            gt_tlwhs, gt_ids = unzip_objs(gt_objs)[:2]
+
+            acc_frame_p = evaluator.acc.mot_events.loc[self.frame_id-3] # =0 ok
+
+            # print('miss_OIds', miss_OIds)
+            # Go over missing tracks by their OId
+            found_rtracks = []
+            for miss_OId in miss_OIds:
+
+                FN_tlwh = gt_tlwhs[gt_ids==miss_OId][0]
+                FN_tlbrs_selected.append(STrack.tlwh_to_tlbr(FN_tlwh))
+
+                miss_HId_p = acc_frame_p[acc_frame_p.OId.eq(miss_OId)].HId.values
+                if len(miss_HId_p) == 0:
+                    print('cannot find miss OId from tracks in previous frame')
+                    continue
+                else:
+                    miss_HId_p = miss_HId_p[0]
+                # import pdb; pdb.set_trace()
+                track_id = miss_HId_p
+
+                track = None
+                for x in r_tracked_stracks:
+                    if x.track_id == track_id:
+                        track = x
+                        found_rtracks.append(track_id)
+
+                if track is None:
+                    continue
+                #
+                # if track == None or track.track_id not in map1:
+                #     # print('cannot find track ID {} from lost tracks in current frame (did not get matched during ghost match)')
+                #     continue
+                #
+                # det = map1[track_id]
+
+                det = [0,0,0,0] # dummy
+
+                target_delta_bbox = FN_tlwh - track.tlwh
+
+                before_boxes.append(track.tlwh)
+                after_boxs.append(FN_tlwh)
+
+                print('!!!!!!')
+                # np.savez(save_path, track_feat=track.img_patch, det_feat=det.img_patch,
+                #          track_tlbr=track.tlbr, det_tlbr=det.tlbr, tlwh_history=track.tlwh_buffer,
+                #          target_delta_bbox=target_delta_bbox)
+                np.savez(save_path, track_feat=track.img_patch, det_feat=track.img_patch,
+                         track_tlbr=track.tlbr, det_tlbr=track.tlbr, tlwh_history=track.tlwh_buffer,
+                         target_delta_bbox=target_delta_bbox)
+
+                # print('except, updating with FN tlwh')
+                # add FN to the tracked pool
+                x,y,w,h = FN_tlwh.astype(int)
+                track.update_FN(FN_tlwh, self.frame_id, img0[y:y+h, x:x+w, :]) ###???
+                activated_stracks.append(track)
+
+        # # ================================================
+        # '''Mark unmatched tracks as lost'''
+        # for it in u_track:
+        #     if not track.state == TrackState.Lost:
+        #         track.mark_lost()
+        #         lost_stracks.append(track)
+
+        for track in r_tracked_stracks:
+            if track.track_id not in found_rtracks:
+                if not track.state == TrackState.Lost:
+                    track.mark_lost()
+                    lost_stracks.append(track)
 
 
         '''Deal with unconfirmed tracks, usually tracks with only one beginning frame'''
@@ -472,34 +624,6 @@ class JDETracker(object):
         self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_stracks)
         self.tracked_stracks = joint_stracks(self.tracked_stracks, refind_stracks)
 
-        # """ Extra step: Remove out-of-frame tracks"""
-        # for track in self.tracked_stracks:
-        #     tlbr = track.tlbr
-        #     tlwh = track.tlwh
-        #     track_w, track_h = tlwh[2], tlwh[3]
-        #     # import pdb; pdb.set_trace()
-        #     # print(track.tracklet_len)
-        #     # print(tlbr[2], width)
-        #     # print(tlbr[3], height)
-        #     # print()
-        #     # print(tlbr)
-        #
-        #     # if track.tracklet_len > 10 and ( tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height): # 78.5, 76.1
-        #     # if  (track.tracklet_len > 5 and track_h / track_w > 3): # 73.6, 75.9
-        #     # if track.tracklet_len > 5 and (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height): # 78.5, 76.1
-        #     # if  (track.tracklet_len > 10 and track_h / track_w > 5): # 78.7, 76.1
-        #     # print(track_h, track_w, track_h/track_w)
-        #     # if track_h / track_w > 1:
-        #     # print('...')
-        #     if track.tracklet_len >= 5 and (track_h / track_w > 3 or (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height)):
-        #     # if track.tracklet_len > 5 and track_h / track_w > 4:
-        #         # print('remove')
-        #         # track.mark_removed()
-        #         # self.removed_stracks.append(track)
-        #
-        #         track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
-
-
         self.lost_stracks = sub_stracks(self.lost_stracks, self.tracked_stracks)
         self.lost_stracks.extend(lost_stracks)
         self.lost_stracks = sub_stracks(self.lost_stracks, self.removed_stracks)
@@ -517,103 +641,18 @@ class JDETracker(object):
         ghost_tlbrs = [track.tlbr for track in self.tracked_stracks if track.is_activated and track.is_ghost]
 
 
-        ''' Collect data for GPN'''
-
-        prefix = path.split('img1')[0]
-        # if opt.use_featmap:
-        if False:
-            dataset_root = '../preprocess-ghost-bbox-th{}-map-more-filter/'.format(opt.occ_reason_thres)
-        else:
-            dataset_root = '../preprocess-ghost-bbox-th0.6/'
-        save_dir = osp.join(prefix, 'preprocess').replace(opt.data_dir, dataset_root)
-        if not osp.exists(save_dir):
-            os.makedirs(save_dir)
-        save_path = path.replace(opt.data_dir, dataset_root).replace('img1', 'preprocess').replace('.png', '').replace('.jpg', '')
-
-
-        trk_tlwhs = [track.tlwh for track in output_stracks]
-        trk_ids = [track.track_id for track in output_stracks]
-        # trk_ids = np.arange(len(trk_tlwhs))
-        evaluator.eval_frame(self.frame_id, trk_tlwhs, trk_ids, rtn_events=False)
-
-        FN_tlbrs_selected = []
-        tracks_selected = []
-
-        before_boxes = []
-        after_boxs = []
-
-        if self.frame_id > 2:
-
-            acc_frame = evaluator.acc.mot_events.loc[self.frame_id-1]
-            miss_rows = acc_frame[acc_frame.Type.eq('MISS')]
-            miss_OIds = miss_rows.OId.values
-
-            gt_objs = evaluator.gt_frame_dict.get(self.frame_id, [])
-            gt_tlwhs, gt_ids = unzip_objs(gt_objs)[:2]
-
-            acc_frame_p = evaluator.acc.mot_events.loc[self.frame_id-2]
-
-            # print('miss_OIds', miss_OIds)
-            # Go over missing tracks by their OId
-            for miss_OId in miss_OIds:
-
-                FN_tlwh = gt_tlwhs[gt_ids==miss_OId][0]
-                FN_tlbrs_selected.append(STrack.tlwh_to_tlbr(FN_tlwh))
-
-                miss_HId_p = acc_frame_p[acc_frame_p.OId.eq(miss_OId)].HId.values
-                if len(miss_HId_p) == 0:
-                    print('cannot find miss OId from tracks in previous frame')
-                    continue
-                else:
-                    miss_HId_p = miss_HId_p[0]
-
-                track_id = miss_HId_p
-
-                track = None
-                for x in r_tracked_stracks:
-                    if x.track_id == track_id:
-                        track = x
-
-                if track == None or track.track_id not in map1:
-                    print('cannot find track ID {} from lost tracks in current frame (did not get matched during ghost match)')
-                    continue
-
-                det = map1[track_id]
-
-
-                # print(self.frame_id)
-                # print(FN_tlwh, track.mean[:4].astype(np.int), det.tlbr)
-                target_delta_bbox = FN_tlwh - track.tlwh
-
-                before_boxes.append(track.tlwh)
-                after_boxs.append(FN_tlwh)
-
-                print('!!!!!!')
-                np.savez(save_path, track_feat=track.img_patch, det_feat=det.img_patch,
-                         track_tlbr=track.tlbr, det_tlbr=det.tlbr, tlwh_history=track.tlwh_buffer,
-                         target_delta_bbox=target_delta_bbox)
-
-                # print('except, updating with FN tlwh')
-                # add FN to the tracked pool
-                x,y,w,h = FN_tlwh.astype(int)
-                track.update_FN(FN_tlwh, self.frame_id, img0[y:y+h, x:x+w, :])
-                activated_stracks.append(track)
-
-
-        # manually match disappeared tracks with ghost detections:
-
         # ''' Collect data for GPN'''
         #
         # prefix = path.split('img1')[0]
         # # if opt.use_featmap:
         # if False:
-        #     dataset_root = '../preprocess-ghost-bbox-th{}-map-more-filter/'.format(opt.occ_reason_thres)
+        #     dataset_root = '../preprocess-ghost-bbox-fairmot-conf0.8-occ{}/'.format(opt.occ_reason_thres)
         # else:
-        #     dataset_root = '../preprocess-ghost-bbox-th0.6/'
-        # save_dir = osp.join(prefix, 'preprocess').replace('/mnt/hdd1/jingjing/', dataset_root)
+        #     dataset_root = '../preprocess-ghost-bbox-th0.5-fairmot-conf{}/'.format(opt.conf_thres)
+        # save_dir = osp.join(prefix, 'preprocess').replace(opt.data_dir, dataset_root)
         # if not osp.exists(save_dir):
         #     os.makedirs(save_dir)
-        # save_path = path.replace('/mnt/hdd1/jingjing/', dataset_root).replace('img1', 'preprocess').replace('.png', '').replace('.jpg', '')
+        # save_path = path.replace(opt.data_dir, dataset_root).replace('img1', 'preprocess').replace('.png', '').replace('.jpg', '')
         #
         #
         # trk_tlwhs = [track.tlwh for track in output_stracks]
@@ -624,33 +663,11 @@ class JDETracker(object):
         # FN_tlbrs_selected = []
         # tracks_selected = []
         #
-        #
         # before_boxes = []
         # after_boxs = []
         #
         # if self.frame_id > 2:
-        #     occ_reason_thres = 0.5
         #
-        #     # Match unmatched tracks with matched dets
-        #     unmatched_tracks = [r_tracked_stracks[it] for it in u_track]
-        #     dists = matching.iou_distance(unmatched_tracks, detections_g)
-        #     # if thresholding_occ_reason:
-        #     if False:
-        #         if len(unmatched_tracks) > 0 and len(detections_g) > 0:
-        #             um_det_matches = list(zip(range(len(unmatched_tracks)), dists.argmin(axis=1)))
-        #             dists_min = dists.min(axis=1)
-        #             um_det_matches = np.array(um_det_matches)[dists_min <= occ_reason_thres,:]
-        #         else:
-        #             um_det_matches = []
-        #     else:
-        #         um_det_matches, u_track, u_detection = matching.linear_assignment(dists, thresh=occ_reason_thres)
-        #
-        #     map1 = {}
-        #     for um, det in um_det_matches:
-        #         map1[unmatched_tracks[um].track_id] = detections_g[det]
-        #
-        #
-        #     # todo: fix the bug in try part
         #     acc_frame = evaluator.acc.mot_events.loc[self.frame_id-1]
         #     miss_rows = acc_frame[acc_frame.Type.eq('MISS')]
         #     miss_OIds = miss_rows.OId.values
@@ -660,18 +677,16 @@ class JDETracker(object):
         #
         #     acc_frame_p = evaluator.acc.mot_events.loc[self.frame_id-2]
         #
+        #     # print('miss_OIds', miss_OIds)
         #     # Go over missing tracks by their OId
         #     for miss_OId in miss_OIds:
-        #         # print()
-        #         # print(self.frame_id)
-        #         # import pdb; pdb.set_trace()
         #
         #         FN_tlwh = gt_tlwhs[gt_ids==miss_OId][0]
         #         FN_tlbrs_selected.append(STrack.tlwh_to_tlbr(FN_tlwh))
         #
         #         miss_HId_p = acc_frame_p[acc_frame_p.OId.eq(miss_OId)].HId.values
         #         if len(miss_HId_p) == 0:
-        #             # print('cannot find miss OId from tracks in previous frame')
+        #             print('cannot find miss OId from tracks in previous frame')
         #             continue
         #         else:
         #             miss_HId_p = miss_HId_p[0]
@@ -683,11 +698,16 @@ class JDETracker(object):
         #             if x.track_id == track_id:
         #                 track = x
         #
-        #         if track == None or track.track_id not in map1:
-        #             # print('cannot find track ID from lost tracks in current frame')
+        #         if track is None:
         #             continue
+        #         #
+        #         # if track == None or track.track_id not in map1:
+        #         #     # print('cannot find track ID {} from lost tracks in current frame (did not get matched during ghost match)')
+        #         #     continue
+        #         #
+        #         # det = map1[track_id]
         #
-        #         det = map1[track_id]
+        #         det = [0,0,0,0] # dummy
         #
         #         # print(self.frame_id)
         #         # print(FN_tlwh, track.mean[:4].astype(np.int), det.tlbr)
@@ -696,8 +716,12 @@ class JDETracker(object):
         #         before_boxes.append(track.tlwh)
         #         after_boxs.append(FN_tlwh)
         #
-        #         np.savez(save_path, track_feat=track.img_patch, det_feat=det.img_patch,
-        #                  track_tlbr=track.tlbr, det_tlbr=det.tlbr, tlwh_history=track.tlwh_buffer,
+        #         print('!!!!!!')
+        #         # np.savez(save_path, track_feat=track.img_patch, det_feat=det.img_patch,
+        #         #          track_tlbr=track.tlbr, det_tlbr=det.tlbr, tlwh_history=track.tlwh_buffer,
+        #         #          target_delta_bbox=target_delta_bbox)
+        #         np.savez(save_path, track_feat=track.img_patch, det_feat=track.img_patch,
+        #                  track_tlbr=track.tlbr, det_tlbr=track.tlbr, tlwh_history=track.tlwh_buffer,
         #                  target_delta_bbox=target_delta_bbox)
         #
         #         # print('except, updating with FN tlwh')

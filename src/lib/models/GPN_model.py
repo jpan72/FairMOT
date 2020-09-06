@@ -44,9 +44,10 @@ class GPN(nn.Module):
         # TODO: add classification layer and CE loss (?)
 
         # LSTM and FC layers
-        self.lstm = nn.LSTM(input_size=4, hidden_size=32, num_layers=2, batch_first=True)
-        self.current_fc = nn.Linear(4, 4)
-        self.lstm_reg = nn.Linear(32+4, 4)
+        self.lstm = nn.LSTM(input_size=4, hidden_size=64, num_layers=2, batch_first=True)
+        # self.current_fc = nn.Linear(4, 4)
+        # self.lstm_reg = nn.Linear(32+4, 4)
+        self.lstm_reg = nn.Linear(64, 4)
         self.dropout = nn.Dropout()
 
     def forward(self, track_imgs, det_imgs, tracks_xyah, dets_xyah, histories_xyah):
@@ -64,8 +65,9 @@ class GPN(nn.Module):
         if self.network == "lstm":
             _, (ht, _) = self.lstm(histories_xyah)
             ht = self.dropout(ht)
-            current_feat = self.current_fc(dets_xyah) # bs, 8
-            feat = torch.cat([ht[-1], current_feat], dim=1) # bs, 32+8
+            # current_feat = self.current_fc(dets_xyah) # bs, 8
+            # feat = torch.cat([ht[-1], current_feat], dim=1) # bs, 32+8
+            feat = ht[-1]
             lstm_output_xyah = self.lstm_reg(feat) # bs, 4
 
             return lstm_output_xyah

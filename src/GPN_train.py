@@ -18,7 +18,7 @@ import torch.nn as nn
 import numpy as np
 
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 
 
 def normalize_bbox(bbox, format):
@@ -78,7 +78,8 @@ def train(
     ])
 
     # Dataloader
-    dataset_root = "../preprocess-ghost-bbox-th0.6-map-more-filter/MOT17/MOT17/train"
+    # dataset_root = "../preprocess-ghost-bbox-th0.6-map-more-filter/MOT17/MOT17/train"
+    dataset_root = "../preprocess-ghost-bbox-th0.6-fairmot-conf0.4/MOT17/images/train"
     dataset = GhostDataset(dataset_root, transforms)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=8)
     print("Size of training data is {}".format(len(dataloader)))
@@ -136,7 +137,7 @@ def train(
         for i, (track_imgs, det_imgs, tracks_tlbr, dets_tlbr, histories_tlwh, target_delta_bbox_tlwh) in enumerate(
                 dataloader):
 
-            if gpn_option == "rel-rel" and histories_tlwh.size(1) == 1:
+            if histories_tlwh.size(1) == 0 or (gpn_option == "rel-rel" and histories_tlwh.size(1) == 1):
                 continue
 
             n_iter = epoch * len(dataloader) + i

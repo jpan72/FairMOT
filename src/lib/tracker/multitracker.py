@@ -19,7 +19,7 @@ from torchvision.transforms import transforms as T
 
 
 def normalize_bbox(bbox, format):
-    ret = copy.deepcopy(bbox)
+    ret = np.asarray(bbox).copy()
     ret[..., 0] /= 1088
     ret[..., 1] /= 608
     if format == "tlwh" or "tlbr":
@@ -28,7 +28,7 @@ def normalize_bbox(bbox, format):
     return ret
 
 def tlbrs_to_tlwhs(tlbrs):
-    ret = copy.deepcopy(tlbrs)
+    ret = np.asarray(tlbrs).copy()
     ret[...,2:] -= ret[...,:2]
     return ret
 
@@ -36,7 +36,7 @@ def tlwhs_to_xyahs(tlwhs):
     """Convert bounding boxes to format `(center x, center y, aspect ratio,
     height)`, where the aspect ratio is `width / height`.
     """
-    ret = copy.deepcopy(tlwhs)
+    ret = np.asarray(tlwhs).copy()
     ret[...,:2] += ret[...,2:] / 2
     ret[...,2] /= ret[...,3]
     return ret
@@ -459,13 +459,12 @@ class JDETracker(object):
 
         # =========== ghost matching ===========
         if opt.ghost:
-            #
-            # remove tracks that are out of frame (i.e. don't match ghosts with such tracks)
+            # remove tracks that are moving out of frame (i.e. don't match ghosts with such tracks)
             out_of_frame_it = []
             for it in u_track:
                 track = r_tracked_stracks[it]
                 tlbr = track.tlbr
-                if track.tracklet_len < 1 or (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height):
+                if (track.tracklet_len > 1) and (tlbr[0] < 0 or tlbr[1] < 0 or tlbr[2] > width or tlbr[3] > height):
                     track.mark_lost()
                     lost_stracks.append(track)
                     out_of_frame_it.append(it)
@@ -473,9 +472,6 @@ class JDETracker(object):
                     # removed_stracks.append(track)
 
             detections_g = ghost_dets
-
-            # r_tracked_stracks = [r_tracked_stracks[it] for it in u_track if (it not in out_of_frame_it)]
-
 
             '''Occlusion Reasoning to Find Ghost BBoxes'''
             # ghost_tlbrs = []
@@ -497,18 +493,18 @@ class JDETracker(object):
                     gpn_option = "abs-abs"
                     gpn_bbox_format = "xyah"
 
-                    if gpn_option == "rel-rel" and history_tlwh.shape[0] == 1:
-                        track.update_ghost(tlbrs_to_tlwhs(track.tlbr), self.frame_id, update_feature=False)
-                        track.ghost = True
-                        activated_stracks.append(track)
-                        continue
-
                     # Get info for this (track, det) pair
                     track_img = track.img_patch
                     det_img = det.img_patch
                     track_tlbr = track.tlbr
                     det_tlbr = det.tlbr
                     history_tlwh = np.array(track.tlwh_buffer)
+
+                    if history_tlwh.shape[0] == 0 or (gpn_option == "rel-rel" and history_tlwh.shape[0] == 1):
+                        track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
+                        track.ghost = True
+                        activated_stracks.append(track)
+                        continue
 
                     # Transform image patches
                     track_img = self.transforms(track_img)
@@ -580,11 +576,11 @@ class JDETracker(object):
                             ghost_tlwh = STrack.xyah_to_tlwh(ghost_xyah)
 
                     # Restore normalization
-                    ghost_tlwh[:,[0.2]] *= 1088
-                    ghost_tlwh[:,[1,3]] *= 608
+                    ghost_tlwh[[0,2]] *= 1088
+                    ghost_tlwh[[1,3]] *= 608
 
                     track.update_ghost(ghost_tlwh, self.frame_id, update_feature=False)
-                    # track.update_ghost(track_tlwh, self.frame_id, update_feature=False)
+                    # track.update_ghost(track.tlwh, self.frame_id, update_feature=False)
                     track.ghost = True
                     activated_stracks.append(track)
 
